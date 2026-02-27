@@ -105,6 +105,18 @@ class BitcoinRPC:
         """Get current block height"""
         return self.call('getblockcount')
 
+    def getbestblockhash(self) -> str:
+        """Get best block hash"""
+        return self.call('getbestblockhash')
+
+    def getblock(self, blockhash: str, verbosity: int = 1) -> Dict:
+        """Get block information"""
+        return self.call('getblock', [blockhash, verbosity])
+
+    def getchaintips(self) -> list:
+        """Get information about all known tips in the block tree"""
+        return self.call('getchaintips')
+
     def test_connection(self) -> bool:
         """Test if connection to node is working"""
         try:
