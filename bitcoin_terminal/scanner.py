@@ -1,6 +1,6 @@
 """
 Bitcoin Data Directory Scanner
-Searches the local filesystem for Bitcoin Core data directories
+Minimalistic BBS-style with yaspin spinners
 """
 
 import os
@@ -8,12 +8,14 @@ import platform
 from pathlib import Path
 from typing import List, Dict, Optional
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich import box
-import pyfiglet
+from yaspin import yaspin
+from yaspin.spinners import Spinners
+
+from bitcoin_terminal.ansi_utils import *
 
 console = Console()
 
@@ -21,9 +23,8 @@ console = Console()
 class BitcoinScanner:
     """Scans for Bitcoin Core data directories"""
 
-    # Common Bitcoin data directory locations by OS
     DEFAULT_PATHS = {
-        'Darwin': [  # macOS
+        'Darwin': [
             '~/Library/Application Support/Bitcoin',
             '~/.bitcoin',
         ],
@@ -39,40 +40,38 @@ class BitcoinScanner:
         ]
     }
 
-    # Files that indicate a valid Bitcoin data directory
-    BITCOIN_MARKERS = [
-        'blocks',
-        'chainstate',
-        'bitcoin.conf',
-        'debug.log',
-        '.lock',
-    ]
+    BITCOIN_MARKERS = ['blocks', 'chainstate', 'bitcoin.conf', 'debug.log', '.lock']
 
     def __init__(self):
         self.system = platform.system()
         self.found_directories: List[Dict] = []
 
     def display_banner(self):
-        """Display beautiful ASCII banner"""
-        title = pyfiglet.figlet_format("BITCOIN", font="slant")
-        subtitle = pyfiglet.figlet_format("Terminal", font="small")
+        """Minimalistic banner"""
+        header = Text()
+        header.append("[ ", style="dim")
+        header.append("BITCOIN NODE SCANNER", style="bold white")
+        header.append(" ]", style="dim")
 
-        console.print(f"[bold orange1]{title}[/bold orange1]", justify="center")
-        console.print(f"[bold white]{subtitle}[/bold white]", justify="center")
-        console.print("[dim]🔍 Scanning for Bitcoin Node data directories...[/dim]\n", justify="center")
+        console.print(Panel(
+            header,
+            border_style="dim white",
+            box=box.ASCII
+        ))
+        console.print()
 
     def get_search_paths(self) -> List[Path]:
-        """Get list of paths to search based on OS"""
+        """Get list of paths to search"""
         paths = []
 
-        # Add default paths for current OS
+        # Default paths
         default_paths = self.DEFAULT_PATHS.get(self.system, [])
         for path_str in default_paths:
             expanded = Path(path_str).expanduser()
             if expanded.exists():
                 paths.append(expanded)
 
-        # Add mounted volumes (useful for external drives)
+        # Mounted volumes
         if self.system == 'Darwin':
             volumes = Path('/Volumes')
             if volumes.exists():
@@ -90,19 +89,17 @@ class BitcoinScanner:
         return paths
 
     def check_bitcoin_directory(self, path: Path) -> Optional[Dict]:
-        """Check if a directory contains Bitcoin data"""
+        """Check if directory contains Bitcoin data"""
         try:
             markers_found = []
 
-            # Check for Bitcoin marker files/directories
             for marker in self.BITCOIN_MARKERS:
                 marker_path = path / marker
                 if marker_path.exists():
                     markers_found.append(marker)
 
-            # Need at least 2 markers to consider it valid
+            # Need at least 2 markers
             if len(markers_found) >= 2:
-                # Try to get directory size
                 try:
                     size = sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
                     size_gb = size / (1024**3)
@@ -116,36 +113,30 @@ class BitcoinScanner:
                     'has_blocks': (path / 'blocks').exists(),
                     'has_chainstate': (path / 'chainstate').exists(),
                 }
-        except PermissionError:
+        except:
             pass
-        except Exception as e:
-            console.print(f"[dim red]Error scanning {path}: {e}[/dim red]")
 
         return None
 
-    def scan_directory(self, root: Path, progress, task) -> None:
-        """Recursively scan a directory tree"""
+    def scan_directory(self, root: Path, sp) -> None:
+        """Recursively scan directory tree"""
         try:
             for item in root.iterdir():
                 if item.is_dir():
-                    # Update progress
-                    progress.update(task, description=f"[cyan]Scanning:[/cyan] {item.name[:40]}")
+                    sp.text = f"Scanning: {item.name[:40]}"
 
-                    # Check if this is a Bitcoin directory
                     result = self.check_bitcoin_directory(item)
                     if result:
                         self.found_directories.append(result)
-                        progress.console.print(f"[green]✓ Found:[/green] {item}")
+                        sp.write(success(f"✓ Found: {item}"))
 
-                    # Don't recurse too deep or into known system directories
-                    if item.name not in ['System', 'Library', 'Applications', 'private', 'usr', 'bin', 'sbin']:
+                    # Don't recurse into system directories
+                    if item.name not in ['System', 'Library', 'Applications', 'private', 'usr', 'bin']:
                         try:
-                            self.scan_directory(item, progress, task)
+                            self.scan_directory(item, sp)
                         except PermissionError:
                             pass
-        except PermissionError:
-            pass
-        except Exception:
+        except:
             pass
 
     def scan(self) -> List[Dict]:
@@ -154,38 +145,39 @@ class BitcoinScanner:
 
         search_paths = self.get_search_paths()
 
-        console.print(Panel(
-            f"[bold white]Searching in {len(search_paths)} locations[/bold white]\n" +
-            "\n".join([f"[dim]• {p}[/dim]" for p in search_paths]),
-            border_style="orange1",
-            box=box.ROUNDED
-        ))
+        # Show search locations
+        console.print(bold("Search Locations:"))
+        for p in search_paths:
+            console.print(muted(f"  • {p}"))
         console.print()
 
-        with Progress(
-            SpinnerColumn(spinner_name="dots", style="orange1"),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=40, style="orange1", complete_style="green"),
-            TimeElapsedColumn(),
-            console=console,
-            transient=False
-        ) as progress:
-
-            task = progress.add_task("[cyan]Scanning...", total=len(search_paths))
+        # Scan with yaspin spinner
+        with yaspin(
+            Spinners.dots,
+            text="Scanning for Bitcoin directories...",
+            color="cyan"
+        ) as sp:
 
             for search_path in search_paths:
-                progress.update(task, description=f"[cyan]Scanning:[/cyan] {search_path.name}")
+                sp.text = f"Scanning: {search_path.name}"
 
-                # First check if the search path itself is a Bitcoin directory
+                # Check path itself
                 result = self.check_bitcoin_directory(search_path)
                 if result:
                     self.found_directories.append(result)
-                    progress.console.print(f"[green]✓ Found:[/green] {search_path}")
+                    sp.write(success(f"✓ Found: {search_path}"))
 
-                # Then scan subdirectories (but not too deep)
-                self.scan_directory(search_path, progress, task)
+                # Scan subdirectories
+                self.scan_directory(search_path, sp)
 
-                progress.advance(task)
+            if self.found_directories:
+                sp.ok("✓")
+                sp.text = "Scan complete"
+            else:
+                sp.fail("✗")
+                sp.text = "No directories found"
+
+        console.print()
 
         # Display results
         self.display_results()
@@ -193,77 +185,67 @@ class BitcoinScanner:
         return self.found_directories
 
     def display_results(self):
-        """Display scan results in a beautiful table"""
-        console.print()
-
+        """Display scan results"""
         if not self.found_directories:
             console.print(Panel(
-                "[yellow]⚠️  No Bitcoin data directories found[/yellow]\n\n"
-                "[dim]Make sure Bitcoin Core is installed and has been run at least once.[/dim]",
-                title="[bold]Scan Complete[/bold]",
+                warning("NO BITCOIN DIRECTORIES FOUND") + "\n\n" +
+                muted("Ensure Bitcoin Core has been run at least once."),
+                title=bold("SCAN RESULTS"),
                 border_style="yellow",
-                box=box.ROUNDED
+                box=box.ASCII
             ))
             return
 
-        # Create results table
+        # Results table
         table = Table(
-            title="[bold orange1]⚡ Bitcoin Data Directories Found[/bold orange1]",
-            box=box.ROUNDED,
-            border_style="orange1",
-            header_style="bold white",
-            show_lines=True
+            box=box.ASCII,
+            border_style="dim white",
+            show_header=True,
+            header_style="bold white"
         )
 
-        table.add_column("Path", style="cyan", no_wrap=False)
-        table.add_column("Size", justify="right", style="green")
-        table.add_column("Blocks", justify="center", style="blue")
+        table.add_column("Path", style="white", no_wrap=False)
+        table.add_column("Size", justify="right", style="dim")
         table.add_column("Status", justify="center")
 
         for dir_info in self.found_directories:
-            # Status indicator
+            path = dir_info['path']
+            size_gb = dir_info['size_gb']
+            size_str = f"{size_gb:.1f} GB" if size_gb > 0 else muted("unknown")
+
             if dir_info['has_blocks'] and dir_info['has_chainstate']:
-                status = "[green]✓ Complete[/green]"
+                status = success("VALID")
             else:
-                status = "[yellow]⚠ Partial[/yellow]"
+                status = warning("PARTIAL")
 
-            # Format size
-            size_str = f"{dir_info['size_gb']:.1f} GB" if dir_info['size_gb'] > 0 else "[dim]Unknown[/dim]"
+            table.add_row(path, size_str, status)
 
-            # Blocks indicator
-            blocks = "✓" if dir_info['has_blocks'] else "✗"
-
-            table.add_row(
-                dir_info['path'],
-                size_str,
-                blocks,
-                status
-            )
-
-        console.print(table)
+        console.print(Panel(
+            table,
+            title=bold(f"FOUND {len(self.found_directories)} DIRECTOR{'Y' if len(self.found_directories) == 1 else 'IES'}"),
+            border_style="green",
+            box=box.ASCII
+        ))
         console.print()
 
         # Summary
         total_size = sum(d['size_gb'] for d in self.found_directories)
-        summary = Text()
-        summary.append("📊 Summary: ", style="bold white")
-        summary.append(f"Found {len(self.found_directories)} director{'y' if len(self.found_directories) == 1 else 'ies'}", style="green")
-        summary.append(f" • Total size: {total_size:.1f} GB", style="blue")
-
-        console.print(Panel(summary, border_style="dim", box=box.ROUNDED))
+        summary = f"Total: {total_size:.1f} GB"
+        console.print(muted(summary))
+        console.print()
 
     def save_to_config(self, config) -> bool:
         """Save first found directory to config"""
         if self.found_directories:
             first_dir = Path(self.found_directories[0]['path'])
             config.set_datadir(first_dir)
-            console.print()
+
             console.print(Panel(
-                f"[green]✓ Saved to config:[/green] {first_dir}\n\n"
-                "[dim]Next time you launch, it will use this directory automatically.[/dim]",
-                title="[bold]💾 Configuration Saved[/bold]",
+                success("SAVED TO CONFIG") + f"\n\n{first_dir}\n\n" +
+                muted("Next launch will use this directory automatically."),
+                title=bold("CONFIGURATION"),
                 border_style="green",
-                box=box.ROUNDED
+                box=box.ASCII
             ))
             return True
         return False

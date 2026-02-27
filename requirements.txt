@@ -11,6 +11,7 @@ python-dotenv>=1.0.0
 
 # Progress & Animation
 tqdm>=4.66.0
+yaspin>=3.0.0
 
 # System utilities
 psutil>=5.9.0
