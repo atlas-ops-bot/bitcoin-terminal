@@ -2,19 +2,11 @@
 textual>=0.50.0
 rich>=13.7.0
 
-# Bitcoin RPC
-python-bitcoinrpc>=1.0
-
 # Configuration
-python-decouple>=3.8
 python-dotenv>=1.0.0
 
 # Progress & Animation
-tqdm>=4.66.0
 yaspin>=3.0.0
 
-# System utilities
+# System monitoring
 psutil>=5.9.0
-
-# ASCII Art
-pyfiglet>=1.0.2

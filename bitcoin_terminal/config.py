@@ -15,9 +15,14 @@ class Config:
     def __init__(self, env_path: Optional[Path] = None):
         """Initialize config, loading from .env if it exists"""
         if env_path is None:
-            # Look for .env in project root
+            # Look for .env in project root first
             project_root = Path(__file__).parent.parent
             env_path = project_root / '.env'
+            # If not found, walk up the directory tree
+            if not env_path.exists():
+                found = find_dotenv(usecwd=True)
+                if found:
+                    env_path = Path(found)
 
         self.env_path = env_path
 
@@ -25,7 +30,7 @@ class Config:
         if self.env_path.exists():
             load_dotenv(self.env_path)
         else:
-            # Create empty .env
+            # Create empty .env in project root
             self.env_path.touch()
 
     def get_datadir(self) -> Optional[Path]:

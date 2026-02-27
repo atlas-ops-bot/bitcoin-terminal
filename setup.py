@@ -9,11 +9,14 @@ from pathlib import Path
 readme = Path(__file__).parent / "README.md"
 long_description = readme.read_text() if readme.exists() else ""
 
-# Read requirements
+# Read requirements (skip comments and blank lines)
 requirements = Path(__file__).parent / "requirements.txt"
 install_requires = []
 if requirements.exists():
-    install_requires = requirements.read_text().splitlines()
+    install_requires = [
+        line.strip() for line in requirements.read_text().splitlines()
+        if line.strip() and not line.strip().startswith('#')
+    ]
 
 setup(
     name="bitcoin-terminal",

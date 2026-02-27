@@ -3,8 +3,6 @@ ANSI Terminal Utilities
 Minimalistic BBS-style terminal helpers inspired by retro aesthetics
 """
 
-from rich.text import Text
-
 
 # Simple color palette - minimalistic BBS style
 def success(text: str) -> str:
@@ -38,8 +36,8 @@ def info(text: str) -> str:
 
 
 def jformat(value, decimals=2) -> str:
-    """Format numbers with commas, return '-' for None/0"""
-    if value is None or value == 0:
+    """Format numbers with commas. Returns '0' for zero, '-' for None."""
+    if value is None:
         return "-"
     if isinstance(value, (int, float)):
         if decimals == 0:
@@ -50,6 +48,8 @@ def jformat(value, decimals=2) -> str:
 
 def format_bytes(bytes_val) -> str:
     """Format bytes into human-readable string"""
+    if not bytes_val:
+        return "0 B"
     if bytes_val < 1024:
         return f"{bytes_val} B"
     elif bytes_val < 1024**2:
@@ -62,6 +62,8 @@ def format_bytes(bytes_val) -> str:
 
 def format_uptime(seconds: int) -> str:
     """Format uptime seconds into readable string"""
+    if not seconds:
+        return "-"
     days = seconds // 86400
     hours = (seconds % 86400) // 3600
     minutes = (seconds % 3600) // 60

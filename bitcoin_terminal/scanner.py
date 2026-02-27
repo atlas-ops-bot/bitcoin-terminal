@@ -3,7 +3,6 @@ Bitcoin Data Directory Scanner
 Minimalistic BBS-style with yaspin spinners
 """
 
-import os
 import platform
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -15,7 +14,9 @@ from rich import box
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 
-from bitcoin_terminal.ansi_utils import *
+from bitcoin_terminal.ansi_utils import (
+    success, warning, muted, bold,
+)
 
 console = Console()
 
@@ -64,7 +65,6 @@ class BitcoinScanner:
         """Get list of paths to search"""
         paths = []
 
-        # Default paths
         default_paths = self.DEFAULT_PATHS.get(self.system, [])
         for path_str in default_paths:
             expanded = Path(path_str).expanduser()
@@ -75,16 +75,22 @@ class BitcoinScanner:
         if self.system == 'Darwin':
             volumes = Path('/Volumes')
             if volumes.exists():
-                for vol in volumes.iterdir():
-                    if vol.is_dir() and vol.name not in ['.', '..', 'Macintosh HD']:
-                        paths.append(vol)
+                try:
+                    for vol in volumes.iterdir():
+                        if vol.is_dir() and vol.name not in ['.', '..', 'Macintosh HD']:
+                            paths.append(vol)
+                except PermissionError:
+                    pass
         elif self.system == 'Linux':
             for mount_point in ['/mnt', '/media']:
                 mount = Path(mount_point)
                 if mount.exists():
-                    for subdir in mount.iterdir():
-                        if subdir.is_dir():
-                            paths.append(subdir)
+                    try:
+                        for subdir in mount.iterdir():
+                            if subdir.is_dir():
+                                paths.append(subdir)
+                    except PermissionError:
+                        pass
 
         return paths
 
@@ -103,7 +109,7 @@ class BitcoinScanner:
                 try:
                     size = sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
                     size_gb = size / (1024**3)
-                except:
+                except (OSError, PermissionError):
                     size_gb = 0
 
                 return {
@@ -113,7 +119,7 @@ class BitcoinScanner:
                     'has_blocks': (path / 'blocks').exists(),
                     'has_chainstate': (path / 'chainstate').exists(),
                 }
-        except:
+        except (OSError, PermissionError):
             pass
 
         return None
@@ -131,12 +137,14 @@ class BitcoinScanner:
                         sp.write(success(f"✓ Found: {item}"))
 
                     # Don't recurse into system directories
-                    if item.name not in ['System', 'Library', 'Applications', 'private', 'usr', 'bin']:
+                    skip_dirs = {'System', 'Library', 'Applications', 'private', 'usr', 'bin',
+                                 '.Trash', '.Spotlight-V100', '.fseventsd', 'node_modules'}
+                    if item.name not in skip_dirs:
                         try:
                             self.scan_directory(item, sp)
                         except PermissionError:
                             pass
-        except:
+        except (OSError, PermissionError):
             pass
 
     def scan(self) -> List[Dict]:
@@ -145,13 +153,11 @@ class BitcoinScanner:
 
         search_paths = self.get_search_paths()
 
-        # Show search locations
         console.print(bold("Search Locations:"))
         for p in search_paths:
             console.print(muted(f"  • {p}"))
         console.print()
 
-        # Scan with yaspin spinner
         with yaspin(
             Spinners.dots,
             text="Scanning for Bitcoin directories...",
@@ -161,13 +167,11 @@ class BitcoinScanner:
             for search_path in search_paths:
                 sp.text = f"Scanning: {search_path.name}"
 
-                # Check path itself
                 result = self.check_bitcoin_directory(search_path)
                 if result:
                     self.found_directories.append(result)
                     sp.write(success(f"✓ Found: {search_path}"))
 
-                # Scan subdirectories
                 self.scan_directory(search_path, sp)
 
             if self.found_directories:
@@ -178,8 +182,6 @@ class BitcoinScanner:
                 sp.text = "No directories found"
 
         console.print()
-
-        # Display results
         self.display_results()
 
         return self.found_directories
@@ -196,7 +198,6 @@ class BitcoinScanner:
             ))
             return
 
-        # Results table
         table = Table(
             box=box.ASCII,
             border_style="dim white",
@@ -228,10 +229,8 @@ class BitcoinScanner:
         ))
         console.print()
 
-        # Summary
         total_size = sum(d['size_gb'] for d in self.found_directories)
-        summary = f"Total: {total_size:.1f} GB"
-        console.print(muted(summary))
+        console.print(muted(f"Total: {total_size:.1f} GB"))
         console.print()
 
     def save_to_config(self, config) -> bool:
