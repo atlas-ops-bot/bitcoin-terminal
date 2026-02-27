@@ -252,6 +252,22 @@ class BitcoinScanner:
 
         console.print(Panel(summary, border_style="dim", box=box.ROUNDED))
 
+    def save_to_config(self, config) -> bool:
+        """Save first found directory to config"""
+        if self.found_directories:
+            first_dir = Path(self.found_directories[0]['path'])
+            config.set_datadir(first_dir)
+            console.print()
+            console.print(Panel(
+                f"[green]✓ Saved to config:[/green] {first_dir}\n\n"
+                "[dim]Next time you launch, it will use this directory automatically.[/dim]",
+                title="[bold]💾 Configuration Saved[/bold]",
+                border_style="green",
+                box=box.ROUNDED
+            ))
+            return True
+        return False
+
 
 if __name__ == "__main__":
     scanner = BitcoinScanner()

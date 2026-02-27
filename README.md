@@ -34,15 +34,29 @@ python -m bitcoin_terminal
 ## Usage
 
 ```bash
-# Start the TUI
+# Start the TUI (smart launcher - scans only if needed)
 python -m bitcoin_terminal
 
-# Scan for Bitcoin data directories
-python -m bitcoin_terminal scan
+# First run: Automatically scans for Bitcoin directory, saves to .env, then launches
+# Subsequent runs: Uses saved directory from .env, launches immediately
 
-# Connect to specific data directory
+# Force re-scan for Bitcoin directories
+python -m bitcoin_terminal scan
+# or
+python -m bitcoin_terminal --force-scan
+
+# Connect to specific data directory (overrides .env)
 python -m bitcoin_terminal --datadir /path/to/bitcoin
 ```
+
+### Smart Directory Detection
+
+Bitcoin Terminal intelligently manages your Bitcoin data directory:
+
+1. **First Launch**: Automatically scans your system, finds Bitcoin directory, saves to `.env`
+2. **Subsequent Launches**: Uses saved directory, skips scanning for instant startup
+3. **Validation**: Checks if directory still exists before launching
+4. **Override**: Use `--datadir` or `--force-scan` to change directory
 
 ## Requirements
 

@@ -15,9 +15,27 @@ pip install -r requirements.txt
 
 ## Usage
 
-### 1. Scan for Bitcoin Directories
+### Quick Start (Recommended)
 
-Find your Bitcoin Core data directory automatically:
+Just run:
+
+```bash
+python -m bitcoin_terminal
+```
+
+**First Launch:**
+- 🔍 Automatically scans your system for Bitcoin directories
+- 💾 Saves the found directory to `.env`
+- 🚀 Launches the TUI dashboard
+
+**Subsequent Launches:**
+- ✅ Reads directory from `.env`
+- ⚡ Launches instantly (no scanning needed)
+- 🎯 Goes straight to the dashboard
+
+### Manual Scan (Optional)
+
+If you want to scan for directories without launching the TUI:
 
 ```bash
 python -m bitcoin_terminal scan
@@ -27,23 +45,19 @@ This will:
 - 🔍 Search your system for Bitcoin data directories
 - 📊 Display a beautiful table with found directories
 - 💾 Show size and status of each directory
-- ⚡ Save the first found directory to config
+- ⚡ Save the first found directory to `.env`
 
-### 2. Run the TUI Dashboard
+### Force Re-scan
 
-Launch the full terminal interface:
-
-```bash
-python -m bitcoin_terminal
-```
-
-Or simply:
+If you moved your Bitcoin directory or want to use a different one:
 
 ```bash
-python -m bitcoin_terminal run
+python -m bitcoin_terminal --force-scan
 ```
 
-This will display:
+### TUI Dashboard Features
+
+When running, the dashboard displays:
 - ⚡ **Node Status**: Connection status, block height, sync progress, peer count
 - ⛓️  **Blockchain Info**: Network, difficulty, size on disk
 - 💾 **Mempool**: Transaction count and size
@@ -58,26 +72,45 @@ When running the TUI:
 
 ## Configuration
 
-Configuration is automatically created at:
-- **macOS/Linux**: `~/.config/bitcoin-terminal/config.ini`
-- **Windows**: `%APPDATA%\bitcoin-terminal\config.ini`
+Configuration is stored in `.env` file in the project root.
 
-### Example config.ini
+### Automatic Configuration
+
+On first run, Bitcoin Terminal automatically:
+1. Scans for Bitcoin data directory
+2. Creates `.env` file
+3. Saves the directory path
+
+### Manual Configuration
+
+You can also create/edit `.env` manually (use `.env.example` as template):
+
+```bash
+# Copy example file
+cp .env.example .env
+
+# Edit with your settings
+nano .env
+```
+
+### Example .env
 
 ```ini
-[bitcoin]
-datadir = /Users/yourusername/Library/Application Support/Bitcoin
-rpc_host = 127.0.0.1
-rpc_port = 8332
-rpc_user = your_rpc_username
-rpc_password = your_rpc_password
+# Bitcoin Data Directory (auto-detected)
+BITCOIN_DATADIR=/Users/yourusername/Library/Application Support/Bitcoin
 
-[display]
-theme = dark
-refresh_interval = 5
-show_mempool = true
-show_peers = true
+# Bitcoin RPC Configuration (optional - reads from bitcoin.conf)
+BITCOIN_RPC_HOST=127.0.0.1
+BITCOIN_RPC_PORT=8332
+BITCOIN_RPC_USER=your_rpc_username
+BITCOIN_RPC_PASSWORD=your_rpc_password
+
+# Display Settings
+REFRESH_INTERVAL=5
+THEME=dark
 ```
+
+**Note:** `.env` is in `.gitignore` for security - never commit it to version control!
 
 ## Connecting to Bitcoin Core
 

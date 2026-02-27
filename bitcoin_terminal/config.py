@@ -1,81 +1,65 @@
 """
 Configuration management for Bitcoin Terminal
+Uses .env file for persistent storage
 """
 
 import os
 from pathlib import Path
 from typing import Optional
-import configparser
+from dotenv import load_dotenv, set_key, find_dotenv
 
 
 class Config:
-    """Configuration manager"""
+    """Configuration manager using .env file"""
 
-    DEFAULT_CONFIG = {
-        'bitcoin': {
-            'datadir': '',
-            'rpc_host': '127.0.0.1',
-            'rpc_port': '8332',
-            'rpc_user': '',
-            'rpc_password': '',
-        },
-        'display': {
-            'theme': 'dark',
-            'refresh_interval': '5',
-            'show_mempool': 'true',
-            'show_peers': 'true',
-        }
-    }
+    def __init__(self, env_path: Optional[Path] = None):
+        """Initialize config, loading from .env if it exists"""
+        if env_path is None:
+            # Look for .env in project root
+            project_root = Path(__file__).parent.parent
+            env_path = project_root / '.env'
 
-    def __init__(self, config_path: Optional[Path] = None):
-        if config_path is None:
-            config_path = Path.home() / '.config' / 'bitcoin-terminal' / 'config.ini'
+        self.env_path = env_path
 
-        self.config_path = config_path
-        self.config = configparser.ConfigParser()
-
-        # Create config directory if it doesn't exist
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Load or create config
-        if self.config_path.exists():
-            self.load()
+        # Load .env if it exists
+        if self.env_path.exists():
+            load_dotenv(self.env_path)
         else:
-            self.create_default()
-
-    def load(self):
-        """Load configuration from file"""
-        self.config.read(self.config_path)
-
-    def save(self):
-        """Save configuration to file"""
-        with open(self.config_path, 'w') as f:
-            self.config.write(f)
-
-    def create_default(self):
-        """Create default configuration"""
-        for section, options in self.DEFAULT_CONFIG.items():
-            self.config[section] = options
-        self.save()
-
-    def get(self, section: str, key: str, fallback: str = '') -> str:
-        """Get configuration value"""
-        return self.config.get(section, key, fallback=fallback)
-
-    def set(self, section: str, key: str, value: str):
-        """Set configuration value"""
-        if not self.config.has_section(section):
-            self.config.add_section(section)
-        self.config[section][key] = value
-        self.save()
+            # Create empty .env
+            self.env_path.touch()
 
     def get_datadir(self) -> Optional[Path]:
-        """Get Bitcoin data directory"""
-        datadir = self.get('bitcoin', 'datadir')
+        """Get Bitcoin data directory from .env"""
+        datadir = os.getenv('BITCOIN_DATADIR', '').strip()
         if datadir:
-            return Path(datadir)
+            path = Path(datadir)
+            # Validate that the directory exists
+            if path.exists():
+                return path
         return None
 
     def set_datadir(self, path: Path):
-        """Set Bitcoin data directory"""
-        self.set('bitcoin', 'datadir', str(path))
+        """Save Bitcoin data directory to .env"""
+        set_key(self.env_path, 'BITCOIN_DATADIR', str(path))
+        # Reload environment
+        load_dotenv(self.env_path, override=True)
+
+    def get_rpc_config(self) -> dict:
+        """Get RPC configuration from .env"""
+        return {
+            'host': os.getenv('BITCOIN_RPC_HOST', '127.0.0.1'),
+            'port': int(os.getenv('BITCOIN_RPC_PORT', '8332')),
+            'user': os.getenv('BITCOIN_RPC_USER', ''),
+            'password': os.getenv('BITCOIN_RPC_PASSWORD', ''),
+        }
+
+    def get_display_config(self) -> dict:
+        """Get display configuration from .env"""
+        return {
+            'refresh_interval': int(os.getenv('REFRESH_INTERVAL', '5')),
+            'theme': os.getenv('THEME', 'dark'),
+        }
+
+    def is_datadir_configured(self) -> bool:
+        """Check if a valid data directory is configured"""
+        return self.get_datadir() is not None

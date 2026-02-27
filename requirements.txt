@@ -7,6 +7,7 @@ python-bitcoinrpc>=1.0
 
 # Configuration
 python-decouple>=3.8
+python-dotenv>=1.0.0
 
 # Progress & Animation
 tqdm>=4.66.0
