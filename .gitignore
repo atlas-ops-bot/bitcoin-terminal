@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Config
+config.ini
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bitcoin data (don't commit actual blockchain)
+*.dat
+blocks/
+chainstate/
+
+# Claude Code & AI
+.claude/
+.aider*
+.cursor/
+
+# Security & Privacy
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+private/
+credentials/
+.secrets
+*.secret
+
+# Passwords & Authentication
+*password*
+*passwd*
+*credentials*
+.netrc
+.htpasswd
+
+# SSH & GPG
+.ssh/
+*.ppk
+.gnupg/
+
+# API Keys & Tokens
+*api_key*
+*api-key*
+*apikey*
+*token*
+.api_keys
