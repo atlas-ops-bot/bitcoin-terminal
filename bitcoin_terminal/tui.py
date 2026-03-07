@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any
 
 from bitcoin_terminal.config import Config
 from bitcoin_terminal.rpc import BitcoinRPC
+from bitcoin_terminal.log_view import LogScreen
 from bitcoin_terminal.ansi_utils import (
     jformat, format_bytes, format_uptime,
 )
@@ -839,9 +840,10 @@ class BitcoinTUI(App):
     """
 
     BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh"),
+        ("q", "quit",          "Quit"),
+        ("r", "refresh",       "Refresh"),
         ("c", "toggle_config", "Config"),
+        ("l", "view_logs",     "Logs"),
     ]
 
     def __init__(self, datadir: Optional[str] = None):
@@ -981,6 +983,26 @@ class BitcoinTUI(App):
             container.display = not container.display
         except Exception:
             pass
+
+    def action_view_logs(self) -> None:
+        log_path = self._get_log_path()
+        self.push_screen(LogScreen(log_path))
+
+    def _get_log_path(self) -> Optional[Path]:
+        """Resolve debug.log, checking chain subdirectories."""
+        if not self.datadir:
+            return None
+        # Main data dir first (mainnet)
+        main_log = self.datadir / "debug.log"
+        if main_log.exists():
+            return main_log
+        # Chain subdirectories
+        for sub in ("testnet3", "testnet4", "signet", "regtest"):
+            p = self.datadir / sub / "debug.log"
+            if p.exists():
+                return p
+        # Return expected path even if it doesn't exist yet
+        return main_log
 
     def action_quit(self) -> None:
         self._shutting_down = True
