@@ -21,7 +21,7 @@ Twelve live dashboard cards, a full `bitcoin.conf` editor, Matrix Rain new-block
 
 <div align="center">
 
-![Bitcoin Terminal Dashboard](imgs/Screenshot%202026-03-11%20at%208.32.28%20PM.png)
+![Bitcoin Terminal Dashboard](imgs/dashboard.png)
 
 *Live dashboard monitoring a Bitcoin Core node — block height with epoch stats, BTC price, peers, mempool, blockchain, halving countdown, and more.*
 
@@ -222,7 +222,7 @@ Press `c` from the dashboard to open the full-screen `bitcoin.conf` editor — a
 
 <div align="center">
 
-![Bitcoin Terminal Config Editor](imgs/Screenshot%202026-03-11%20at%208.36.43%20PM.png)
+![Bitcoin Terminal Config Editor](imgs/config-editor.png)
 
 *The built-in config editor — browse 100+ fields by category, toggle settings with Enter, and restart your node directly from the terminal.*
 
