@@ -10,11 +10,6 @@ def success(text: str) -> str:
     return f"[green]{text}[/green]"
 
 
-def error(text: str) -> str:
-    """Red text for errors/negative values"""
-    return f"[red]{text}[/red]"
-
-
 def warning(text: str) -> str:
     """Yellow text for warnings"""
     return f"[yellow]{text}[/yellow]"
@@ -28,11 +23,6 @@ def muted(text: str) -> str:
 def bold(text: str) -> str:
     """Bold white text for headers"""
     return f"[bold white]{text}[/bold white]"
-
-
-def info(text: str) -> str:
-    """Cyan text for informational content"""
-    return f"[cyan]{text}[/cyan]"
 
 
 def jformat(value, decimals=2) -> str:
@@ -51,7 +41,7 @@ def format_bytes(bytes_val) -> str:
     if not bytes_val:
         return "0 B"
     if bytes_val < 1024:
-        return f"{bytes_val} B"
+        return f"{bytes_val:.2f} B" if isinstance(bytes_val, float) else f"{bytes_val} B"
     elif bytes_val < 1024**2:
         return f"{bytes_val/1024:.1f} KB"
     elif bytes_val < 1024**3:
@@ -62,7 +52,7 @@ def format_bytes(bytes_val) -> str:
 
 def format_uptime(seconds: int) -> str:
     """Format uptime seconds into readable string"""
-    if not seconds:
+    if not seconds or seconds < 0:
         return "-"
     days = seconds // 86400
     hours = (seconds % 86400) // 3600

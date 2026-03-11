@@ -8,7 +8,6 @@ Navigation: press  L  (or Esc) to return to the dashboard.
 """
 
 import re
-import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -80,6 +79,23 @@ _CATEGORY_RULES = [
 def _truncate_hash(h: str) -> str:
     """Shorten a hash to first-8…last-6 chars."""
     return f"{h[:8]}…{h[-6:]}"
+
+
+# ── Noise filter — lines to suppress from display ─────────────────────────────
+# These patterns match high-volume, low-value log spam (typically caused by
+# our own RPC polling or internal node housekeeping).
+_NOISE_PATTERNS = [
+    re.compile(r'\[http\]\s*Received a POST request', re.I),
+    re.compile(r'\[http\]\s*Received a GET request', re.I),
+    re.compile(r'\[httpworker\.\d+\]', re.I),
+]
+
+def _is_noise(line: str) -> bool:
+    """Return True if the line matches a known noise pattern."""
+    for pat in _NOISE_PATTERNS:
+        if pat.search(line):
+            return True
+    return False
 
 
 def _format_line(raw: str) -> Text:
@@ -173,8 +189,6 @@ def _format_line(raw: str) -> Text:
 
 # ── Screen ────────────────────────────────────────────────────────────────────
 
-_LOG_HEADER_TEXT = " ₿  B I T C O I N   N O D E   L O G "
-
 class _LogHeader(Static):
     def on_mount(self) -> None:
         t = Text(justify="center")
@@ -216,20 +230,20 @@ class LogScreen(Screen):
     """
 
     BINDINGS = [
-        ("l",      "pop_screen", "Dashboard"),
-        ("escape", "pop_screen", "Dashboard"),
+        ("l",      "go_back",    "Dashboard"),
+        ("escape", "go_back",    "Dashboard"),
         ("q",      "app.quit",   "Quit"),
         ("end",    "scroll_end", "Latest"),
         ("home",   "scroll_top", "Top"),
     ]
 
+    _INITIAL_LINES = 300
+    _MAX_DISPLAY   = 2000
+
     def __init__(self, log_path: Optional[Path], **kwargs):
         super().__init__(**kwargs)
         self.log_path = log_path
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._INITIAL_LINES = 300     # lines to show on first open
-        self._MAX_DISPLAY   = 2000    # RichLog buffer
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -246,38 +260,54 @@ class LogScreen(Screen):
 
     def on_mount(self) -> None:
         self.title = "Bitcoin Terminal — Log"
-        log: RichLog = self.query_one("#log", RichLog)
+        log_widget: RichLog = self.query_one("#log", RichLog)
 
         if not self.log_path:
-            log.write(Text("  No log path configured.", style=f"dim {SOFT_YELLOW}"))
+            log_widget.write(Text("  No log path configured.",
+                                  style=f"dim {SOFT_YELLOW}"))
             return
 
         if not self.log_path.exists():
-            log.write(Text(
+            log_widget.write(Text(
                 f"  debug.log not found:\n  {self.log_path}",
                 style=f"dim {SOFT_RED}",
             ))
             return
 
+        # Show loading indicator immediately
+        log_widget.write(Text("  Loading debug.log...", style=f"dim {CYAN}"))
+
         self._running = True
-        self._thread = threading.Thread(
-            target=self._tail_worker, daemon=True
-        )
-        self._thread.start()
+        self._start_tail()
 
     def on_unmount(self) -> None:
         self._running = False
 
-    # ── Background worker ────────────────────────────────────────────────────
+    # ── Background worker ──────────────────────────────────────────────────
+
+    def _write_lines(self, lines: list, scroll: bool = False) -> None:
+        """Write formatted lines to the RichLog (runs on main thread)."""
+        try:
+            widget: RichLog = self.query_one("#log", RichLog)
+            for line in lines:
+                widget.write(line)
+            if scroll:
+                widget.scroll_end(animate=False)
+        except Exception:
+            pass
+
+    def _start_tail(self) -> None:
+        """Launch the tail worker via App.run_worker (thread-safe)."""
+        self.app.run_worker(self._tail_worker, thread=True, exclusive=True)
 
     def _tail_worker(self) -> None:
         """Read the last N lines then stream new content."""
         log_path = self.log_path
+        tail_pos = 0
 
         # --- seed: read last _INITIAL_LINES lines efficiently ----------------
         try:
             with open(log_path, "rb") as f:
-                # Walk back to collect enough newlines
                 f.seek(0, 2)
                 file_size = f.tell()
                 chunk_size = 65536
@@ -292,20 +322,16 @@ class LogScreen(Screen):
 
                 lines = buf.decode("utf-8", errors="replace").splitlines()
                 seed_lines = lines[-self._INITIAL_LINES:]
-                tail_pos = file_size  # we'll continue from here
+                tail_pos = file_size
 
-            # Push seed lines to the widget
-            def _write_seed():
-                if not self._running:
-                    return
-                widget: RichLog = self.query_one("#log", RichLog)
-                for raw in seed_lines:
-                    widget.write(_format_line(raw))
-                widget.scroll_end(animate=False)
+            # Format seed lines (skip noise)
+            formatted = [_format_line(raw) for raw in seed_lines
+                         if raw and not _is_noise(raw)]
 
-            self.call_from_thread(_write_seed)
+            if formatted and self._running:
+                self.app.call_from_thread(self._write_lines, formatted, True)
 
-        except (OSError, IOError):
+        except Exception:
             tail_pos = 0
 
         # --- live tail -------------------------------------------------------
@@ -319,32 +345,24 @@ class LogScreen(Screen):
                         if not line:
                             break
                         raw = line.rstrip("\n")
-                        if raw:
+                        if raw and not _is_noise(raw):
                             batch.append(_format_line(raw))
 
                     if batch and self._running:
-                        captured = batch
-
-                        def _write_batch(b=captured):
-                            if not self._running:
-                                return
-                            try:
-                                widget: RichLog = self.query_one(
-                                    "#log", RichLog
-                                )
-                                for t in b:
-                                    widget.write(t)
-                            except Exception:
-                                pass
-
-                        self.call_from_thread(_write_batch)
+                        self.app.call_from_thread(
+                            self._write_lines, list(batch))
 
                     time.sleep(0.25)
 
-        except (OSError, IOError):
+        except Exception:
             pass
 
     # ── Actions ──────────────────────────────────────────────────────────────
+
+    def action_go_back(self) -> None:
+        """Stop tailing and return to dashboard."""
+        self._running = False
+        self.dismiss()
 
     def action_scroll_end(self) -> None:
         self.query_one("#log", RichLog).scroll_end(animate=True)

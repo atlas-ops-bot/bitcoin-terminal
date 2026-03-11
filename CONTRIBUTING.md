@@ -1,19 +1,13 @@
-# Contributing to Bitcoin Terminal 🤝
+# Contributing
 
-Thank you for your interest in contributing! This project aims to be the most beautiful and functional Bitcoin Node TUI available.
+Thank you for your interest in Bitcoin Terminal.
 
-## Development Setup
+## Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/bitcoin-terminal.git
+git clone https://github.com/CRTao/bitcoin-terminal.git
 cd bitcoin-terminal
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install in development mode
+python3 -m venv venv && source venv/bin/activate
 pip install -e .
 pip install -r requirements.txt
 ```
@@ -21,175 +15,83 @@ pip install -r requirements.txt
 ## Project Structure
 
 ```
-bitcoin-terminal/
-├── bitcoin_terminal/
-│   ├── __init__.py          # Package initialization
-│   ├── __main__.py          # CLI entry point
-│   ├── scanner.py           # Bitcoin directory scanner
-│   ├── tui.py               # Main TUI application
-│   ├── rpc.py               # Bitcoin RPC client
-│   └── config.py            # Configuration management
-├── requirements.txt         # Python dependencies
-├── setup.py                 # Package setup
-└── README.md
+bitcoin_terminal/
+├── __main__.py        # CLI entry point, setup wizard launcher
+├── tui.py             # Main dashboard — 12 cards, CSS Grid layout
+├── config_screen.py   # bitcoin.conf editor, save/restart dialog
+├── config_data.py     # 100+ field definitions with danger levels
+├── rpc.py             # Bitcoin RPC client (cookie / password / rpcauth)
+├── data.py            # External API fetchers, price cache, supply math
+├── scanner.py         # Auto-detect Bitcoin data directories
+├── config.py          # .env configuration management
+├── setup_wizard.py    # Guided first-run wizard
+├── log_view.py        # Live debug.log viewer
+└── ansi_utils.py      # Terminal styling helpers
 ```
 
-## Design Philosophy
+## Stack
 
-Inspired by [warden_terminal](https://github.com/pxsocs/warden_terminal), we follow these principles:
+| Library | Role |
+|---------|------|
+| **Textual** | TUI framework (screens, widgets, CSS layout) |
+| **Rich** | Panels, tables, styled text |
+| **pyfiglet** | ASCII art for hero cards |
+| **psutil** | CPU, memory, disk, temperature monitoring |
+| **python-dotenv** | `.env` persistence |
 
-1. **Beautiful by Default**: Every interface should look amazing
-2. **Fast & Responsive**: No lag, smooth animations
-3. **Informative**: Show what matters, hide complexity
-4. **Modular**: Easy to extend with new features
-5. **User-Friendly**: Intuitive keyboard shortcuts and navigation
+## Running
 
-## Technology Stack
-
-- **Textual**: Modern TUI framework (main dashboard)
-- **Rich**: Beautiful terminal output (colors, tables, progress bars)
-- **PyFiglet**: ASCII art for branding
-- **Python 3.8+**: Core language
-
-## Areas for Contribution
-
-### 🎨 UI/UX Improvements
-- Additional color themes
-- New dashboard widgets
-- Better animations
-- Responsive layouts
-
-### 📊 Features
-- Block explorer integration
-- Transaction mempool viewer
-- Peer connection map
-- Network statistics graphs
-- Lightning Network integration
-- Hardware monitoring (CPU, RAM, disk I/O)
-
-### 🔧 Technical
-- Windows compatibility testing
-- Performance optimizations
-- Better error handling
-- Unit tests
-- Documentation improvements
-
-### 🐛 Bug Fixes
-- Check the [Issues](https://github.com/yourusername/bitcoin-terminal/issues) page
-- Report bugs you find
-- Fix existing issues
+```bash
+python -m bitcoin_terminal            # Normal launch
+python -m bitcoin_terminal --setup    # Re-run setup wizard
+python -m bitcoin_terminal --datadir /path/to/bitcoin
+python -m bitcoin_terminal scan       # Scan only
+```
 
 ## Coding Standards
 
-```python
-# Use type hints
-def get_block_height(rpc: BitcoinRPC) -> int:
-    return rpc.getblockcount()
+- Type hints on public functions
+- Descriptive names (`scan_for_bitcoin_directories`, not `scan_dirs`)
+- Comments only where logic isn't obvious
+- No unused imports or dead code
 
-# Clear, descriptive names
-def scan_for_bitcoin_directories() -> List[Path]:
-    pass
-
-# Document complex functions
-def calculate_sync_percentage(current: int, total: int) -> float:
-    """
-    Calculate blockchain sync percentage.
-
-    Args:
-        current: Current block height
-        total: Target block height
-
-    Returns:
-        Percentage (0.0 to 100.0)
-    """
-    return (current / total) * 100 if total > 0 else 0.0
-```
-
-## Commit Message Format
+## Commit Messages
 
 ```
 <type>: <subject>
 
-<body>
-
-Co-Authored-By: Your Name <your.email@example.com>
-```
-
-**Types:**
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation
-- `style`: Formatting, colors
-- `refactor`: Code restructuring
-- `test`: Adding tests
-- `chore`: Maintenance
-
-**Examples:**
-```
-feat: Add Lightning Network support
-
-- Integrate lnd RPC client
-- Display channel balance
-- Show peer connections
-
-Co-Authored-By: Jane Doe <jane@example.com>
+feat:     New feature
+fix:      Bug fix
+docs:     Documentation
+style:    Formatting, colors, layout
+refactor: Code restructure (no behavior change)
+test:     Tests
+chore:    Maintenance
 ```
 
 ## Pull Request Process
 
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feat/amazing-feature`)
-3. **Make** your changes
-4. **Test** thoroughly
-5. **Commit** with clear messages
-6. **Push** to your fork
-7. **Open** a Pull Request
+1. Fork the repo
+2. Create a feature branch: `git checkout -b feat/my-feature`
+3. Make your changes and test
+4. Commit with clear messages
+5. Open a PR
 
 ### PR Checklist
 
 - [ ] Code follows project style
-- [ ] All tests pass
-- [ ] Documentation updated
-- [ ] No breaking changes (or clearly documented)
-- [ ] Screenshots for UI changes
+- [ ] Tested manually against a running Bitcoin node
+- [ ] No sensitive data (keys, passwords) committed
+- [ ] Documentation updated if adding features
 
-## Testing
+## Areas to Contribute
 
-```bash
-# Run the scanner
-python -m bitcoin_terminal scan
-
-# Run the TUI
-python -m bitcoin_terminal
-
-# Test with custom datadir
-python -m bitcoin_terminal --datadir /path/to/bitcoin
-```
-
-## Getting Help
-
-- 💬 Open a [Discussion](https://github.com/yourusername/bitcoin-terminal/discussions)
-- 🐛 File an [Issue](https://github.com/yourusername/bitcoin-terminal/issues)
-- 📧 Contact maintainers
-
-## Code of Conduct
-
-- Be respectful and inclusive
-- Focus on constructive feedback
-- Help others learn and grow
-- Follow the [Contributor Covenant](https://www.contributor-covenant.org/)
-
-## Recognition
-
-Contributors will be:
-- Listed in README.md
-- Mentioned in release notes
-- Included in AUTHORS file
+- **Cards**: New dashboard widgets (Lightning, fee estimator history, etc.)
+- **Themes**: Color theme support
+- **Platform**: Windows testing and fixes
+- **Tests**: Unit and integration tests
+- **Performance**: Reduce API calls, optimize rendering
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
-
----
-
-Ready to contribute? **Let's build something awesome!** ⚡🟠
+By contributing you agree your work is licensed under [MIT](LICENSE).

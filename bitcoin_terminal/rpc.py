@@ -166,7 +166,8 @@ class BitcoinRPC:
             with urllib.request.urlopen(req, timeout=5) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 if 'error' in result and result['error']:
-                    raise Exception(f"RPC Error: {result['error']}")
+                    raise Exception(
+                        f"RPC Error ({method}): {result['error']}")
                 return result.get('result')
         except urllib.error.HTTPError as e:
             if e.code == 401:
@@ -209,6 +210,15 @@ class BitcoinRPC:
     def getblock(self, blockhash: str, verbosity: int = 1) -> Dict:
         return self.call('getblock', [blockhash, verbosity])
 
+    def getblockhash(self, height: int) -> str:
+        return self.call('getblockhash', [height])
+
+    def getblockstats(self, hash_or_height, stats=None) -> Dict:
+        params = [hash_or_height]
+        if stats:
+            params.append(stats)
+        return self.call('getblockstats', params)
+
     def getchaintips(self) -> list:
         return self.call('getchaintips')
 
@@ -217,5 +227,5 @@ class BitcoinRPC:
         try:
             self.getblockcount()
             return True
-        except (ConnectionError, Exception):
+        except Exception:
             return False

@@ -8,5 +8,8 @@ python-dotenv>=1.0.0
 # Progress & Animation
 yaspin>=3.0.0
 
+# ASCII Art
+pyfiglet>=1.0.0
+
 # System monitoring
 psutil>=5.9.0

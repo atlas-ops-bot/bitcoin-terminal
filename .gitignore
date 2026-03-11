@@ -36,6 +36,10 @@ ENV/
 config.ini
 *.log
 
+# Price cache
+.price_cache.json
+**/.price_cache.json
+
 # OS
 .DS_Store
 Thumbs.db

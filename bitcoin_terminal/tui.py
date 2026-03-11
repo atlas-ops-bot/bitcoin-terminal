@@ -3,9 +3,13 @@ Main TUI Application
 Bitcoin Node Monitor — BBS-inspired dark terminal aesthetic
 """
 
+import time
+import random
+
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import Header, Footer, Static
+from textual.containers import Horizontal, Vertical, Center, Grid
+from textual.widgets import Header, Footer, Static, Button
+from textual.screen import ModalScreen
 from textual.reactive import reactive
 from rich.panel import Panel
 from rich.text import Text
@@ -18,6 +22,9 @@ from typing import Optional, Dict, Any
 from bitcoin_terminal.config import Config
 from bitcoin_terminal.rpc import BitcoinRPC
 from bitcoin_terminal.log_view import LogScreen
+from bitcoin_terminal.config_screen import ConfigScreen
+import pyfiglet
+
 from bitcoin_terminal.ansi_utils import (
     jformat, format_bytes, format_uptime,
 )
@@ -25,6 +32,8 @@ from bitcoin_terminal.data import (
     fetch_price, fetch_difficulty_adjustment, fetch_hashrate,
     fetch_recommended_fees, fetch_system_metrics,
     SyncTracker, format_hashrate, format_eta,
+    PeerTracker, RPCMonitor,
+    block_subsidy, total_mined, MAX_SUPPLY,
 )
 
 # ── Color palette ──────────────────────────────────────────────────────
@@ -40,6 +49,96 @@ DIM_BORDER = "#444444"
 # Halving constants
 HALVING_INTERVAL = 210_000
 
+# Satoshi Nakamoto quotes — sourced from public posts and emails
+SATOSHI_QUOTES = [
+    {
+        "text": "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks.",
+        "date": "2009-01-03",
+        "source": "Genesis Block",
+    },
+    {
+        "text": "I've been working on a new electronic cash system that's fully "
+                "peer-to-peer, with no trusted third party.",
+        "date": "2008-10-31",
+        "source": "Cryptography Mailing List",
+    },
+    {
+        "text": "The root problem with conventional currency is all the trust "
+                "that's required to make it work.",
+        "date": "2009-02-11",
+        "source": "P2P Foundation",
+    },
+    {
+        "text": "Lost coins only make everyone else's coins worth slightly more. "
+                "Think of it as a donation to everyone.",
+        "date": "2010-06-21",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "It might make sense just to get some in case it catches on.",
+        "date": "2009-01-17",
+        "source": "Cryptography Mailing List",
+    },
+    {
+        "text": "I'm sure that in 20 years there will either be very large "
+                "transaction volume or no volume.",
+        "date": "2010-02-14",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "The nature of Bitcoin is such that once version 0.1 was released, "
+                "the core design was set in stone for the rest of its lifetime.",
+        "date": "2010-06-17",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "If you don't believe me or don't understand, I don't have time "
+                "to try to convince you, sorry.",
+        "date": "2010-07-29",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "Writing a description for this thing for general audiences is "
+                "bloody hard. There's nothing to relate it to.",
+        "date": "2009-01-15",
+        "source": "Email to Dustin Trammell",
+    },
+    {
+        "text": "We can win a major battle in the arms race and gain a new "
+                "territory of freedom for several years.",
+        "date": "2008-11-07",
+        "source": "Cryptography Mailing List",
+    },
+    {
+        "text": "The proof-of-work chain is a solution to the Byzantine "
+                "Generals' Problem.",
+        "date": "2008-11-13",
+        "source": "Cryptography Mailing List",
+    },
+    {
+        "text": "Being open source means anyone can independently review the code.",
+        "date": "2009-12-10",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "SHA-256 is very strong. It can last several decades unless "
+                "there's some massive breakthrough attack.",
+        "date": "2010-08-09",
+        "source": "BitcoinTalk",
+    },
+    {
+        "text": "For greater privacy, it's best to use bitcoin addresses only once.",
+        "date": "2008-10-31",
+        "source": "Bitcoin Whitepaper",
+    },
+    {
+        "text": "With e-currency based on cryptographic proof, without the need "
+                "to trust a third party middleman, money can be secure.",
+        "date": "2009-02-11",
+        "source": "P2P Foundation",
+    },
+]
+
 
 def _make_bar(pct: float, width: int = 20, fill_color: str = BTC_ORANGE,
               empty_color: str = DIM_BORDER) -> Text:
@@ -53,43 +152,113 @@ def _make_bar(pct: float, width: int = 20, fill_color: str = BTC_ORANGE,
     return t
 
 
-def _fetch_all_data(rpc: BitcoinRPC) -> Dict[str, Any]:
+def _fetch_all_data(rpc: BitcoinRPC, datadir: str = None) -> Dict[str, Any]:
     """Fetch all node data in one batch (runs in worker thread)."""
     data: Dict[str, Any] = {}
     try:
         data['blockchain'] = rpc.getblockchaininfo()
-    except (ConnectionError, Exception) as e:
+    except Exception as e:
         data['error'] = str(e)
         data['price'] = fetch_price()
         data['difficulty_adj'] = fetch_difficulty_adjustment()
         data['hashrate'] = fetch_hashrate()
         data['fees'] = fetch_recommended_fees()
-        data['system'] = fetch_system_metrics()
+        data['system'] = fetch_system_metrics(datadir=datadir)
         return data
 
     try:
         data['network'] = rpc.getnetworkinfo()
-    except (ConnectionError, Exception):
+    except Exception:
         data['network'] = {}
     try:
         data['mempool'] = rpc.getmempoolinfo()
-    except (ConnectionError, Exception):
+    except Exception:
         data['mempool'] = {}
     try:
         data['peers'] = rpc.getpeerinfo()
-    except (ConnectionError, Exception):
+    except Exception:
         data['peers'] = []
     try:
         data['uptime'] = rpc.uptime()
-    except (ConnectionError, Exception):
+    except Exception:
         data['uptime'] = 0
+
+    # Fetch actual latest block time (not mediantime)
+    try:
+        best_hash = data['blockchain'].get('bestblockhash', '')
+        if best_hash:
+            block = rpc.getblock(best_hash)
+            data['last_block_time'] = block.get('time', 0)
+    except Exception:
+        pass
+
+    # Block timing stats (epoch avg + 24h avg)
+    try:
+        height = data['blockchain'].get('blocks', 0)
+        tip_time = data.get('last_block_time', 0)
+        if height > 2016 and tip_time > 0:
+            # Epoch average: time from epoch start block to tip
+            epoch_start_h = height - (height % 2016)
+            blocks_in_epoch = height - epoch_start_h
+            if blocks_in_epoch > 0:
+                epoch_hash = rpc.getblockhash(epoch_start_h)
+                epoch_block = rpc.getblock(epoch_hash)
+                epoch_start_ts = epoch_block.get('time', 0)
+                if epoch_start_ts > 0:
+                    epoch_elapsed = tip_time - epoch_start_ts
+                    epoch_avg = epoch_elapsed / blocks_in_epoch
+                else:
+                    epoch_avg = None
+            else:
+                epoch_avg = None
+
+            # 24h average: sample block ~144 blocks ago
+            sample_depth = min(144, height - 1)
+            sample_h = height - sample_depth
+            sample_hash = rpc.getblockhash(sample_h)
+            sample_block = rpc.getblock(sample_hash)
+            sample_ts = sample_block.get('time', 0)
+            if sample_ts > 0 and tip_time > sample_ts:
+                avg_24h = (tip_time - sample_ts) / sample_depth
+            else:
+                avg_24h = None
+
+            data['block_time_stats'] = {
+                'epoch_avg': epoch_avg,
+                'avg_24h': avg_24h,
+                'blocks_in_epoch': blocks_in_epoch,
+            }
+
+            # Average fee as % of block reward (sample 6 blocks over last 144)
+            try:
+                sample_heights = []
+                step = max(1, sample_depth // 5)
+                for i in range(6):
+                    sh = height - i * step
+                    if sh > 0:
+                        sample_heights.append(sh)
+                fee_pcts = []
+                for sh in sample_heights:
+                    bs = rpc.getblockstats(
+                        sh, ['totalfee', 'subsidy'])
+                    tfee = bs.get('totalfee', 0)   # satoshis
+                    sub = bs.get('subsidy', 0)      # satoshis
+                    if sub > 0:
+                        fee_pcts.append(tfee / sub * 100)
+                if fee_pcts:
+                    data['block_time_stats']['avg_fee_pct'] = (
+                        sum(fee_pcts) / len(fee_pcts))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     # External APIs (non-critical)
     data['price'] = fetch_price()
     data['difficulty_adj'] = fetch_difficulty_adjustment()
     data['hashrate'] = fetch_hashrate()
     data['fees'] = fetch_recommended_fees()
-    data['system'] = fetch_system_metrics()
+    data['system'] = fetch_system_metrics(datadir=datadir)
 
     return data
 
@@ -146,6 +315,9 @@ class StatusBar(Static):
     chain = reactive("main")
     sync_pct = reactive(0.0)
     btc_price = reactive(0.0)
+    epoch_avg = reactive(0.0)
+    hashprice = reactive(0.0)
+    fee_pct = reactive(0.0)
 
     def render(self) -> Text:
         line = Text()
@@ -180,6 +352,31 @@ class StatusBar(Static):
             line.append("  \u2502  ", style=DIM_BORDER)
             line.append("$", style=NEON_GREEN)
             line.append(f"{self.btc_price:,.0f}", style=f"bold {NEON_GREEN}")
+
+        if self.hashprice > 0:
+            line.append("  \u2502  ", style=DIM_BORDER)
+            line.append(f"${self.hashprice:,.2f}", style=f"bold {NEON_GREEN}")
+            line.append("/PH", style="dim")
+
+        if self.epoch_avg > 0:
+            line.append("  \u2502  ", style=DIM_BORDER)
+            mins = int(self.epoch_avg // 60)
+            secs = int(self.epoch_avg % 60)
+            if self.epoch_avg < 540:
+                color = NEON_GREEN
+            elif self.epoch_avg <= 660:
+                color = CYAN
+            else:
+                color = SOFT_YELLOW
+            line.append("\u23f1 ", style="dim")
+            line.append(f"{mins}m{secs:02d}s", style=f"bold {color}")
+
+        if self.fee_pct > 0:
+            line.append("  \u2502  ", style=DIM_BORDER)
+            fc = NEON_GREEN if self.fee_pct < 10 else (
+                SOFT_YELLOW if self.fee_pct < 50 else BTC_ORANGE)
+            line.append("Fee ", style="dim")
+            line.append(f"{self.fee_pct:.1f}%", style=f"bold {fc}")
 
         line.append("  \u2502  ", style=DIM_BORDER)
         line.append(datetime.now().strftime("%H:%M:%S"), style="dim")
@@ -262,7 +459,12 @@ class NodeCard(Static):
         t.add_row("Height", ht)
 
         ver = self.data.get('version', 0)
-        if ver:
+        subver = self.data.get('subversion', '')
+        if subver:
+            # e.g. "/Satoshi:27.0.0/" → "Satoshi 27.0.0"
+            display_ver = subver.strip('/').replace(':', ' ')
+            t.add_row("Version", Text(display_ver, style="white"))
+        elif ver:
             t.add_row("Version",
                        f"{ver // 10000}.{(ver // 100) % 100}.{ver % 100}")
 
@@ -281,13 +483,15 @@ class NodeCard(Static):
 
 
 class NetworkCard(Static):
-    """Network connections"""
+    """P2P network peer connections with historical tracking"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.data: Dict[str, Any] = {}
+        self.conn_stats: Dict[str, Any] = {}
 
-    def update_data(self, network: Dict, peers: list):
+    def update_data(self, network: Dict, peers: list,
+                    conn_stats: Dict = None):
         ipv4 = ipv6 = tor = i2p = 0
         for p in peers:
             addr = p.get('addr', '')
@@ -309,18 +513,20 @@ class NetworkCard(Static):
             'rx': sum(p.get('bytesrecv', 0) for p in peers),
             'tx': sum(p.get('bytessent', 0) for p in peers),
         }
+        self.conn_stats = conn_stats or {}
         self.refresh()
 
     def render(self) -> Panel:
         if not self.data:
             return Panel(Text("  Waiting for peers...", style="dim italic"),
-                         title=f"[bold {CYAN}]\u21c4 NETWORK[/]",
+                         title=f"[bold {CYAN}]\u21c4 P2P PEERS[/]",
                          border_style=DIM_BORDER, box=box.ROUNDED)
 
         t = Table.grid(padding=(0, 1), expand=True)
         t.add_column("K", style="dim", width=10)
         t.add_column("V", style="white")
 
+        # ── Live connections ──
         total = self.data['connections']
         inn = self.data['connections_in']
         out = self.data['connections_out']
@@ -330,6 +536,7 @@ class NetworkCard(Static):
         pt.append(f"  \u2191{out}", style=CYAN)
         t.add_row("Peers", pt)
 
+        # Network types
         parts = []
         for label, key, color in [("IPv4", 'ipv4', "white"),
                                    ("IPv6", 'ipv6', "white"),
@@ -346,59 +553,169 @@ class NetworkCard(Static):
                 tt.append(f" {txt} ", style=f"{col} on {DIM_BORDER}")
             t.add_row("Types", tt)
 
+        # Bandwidth total + rate
         tr = Text()
         tr.append(f"\u2193{format_bytes(self.data['rx'])}", style=SOFT_GREEN)
         tr.append(f"  \u2191{format_bytes(self.data['tx'])}", style=CYAN)
         t.add_row("Traffic", tr)
 
-        return Panel(t, title=f"[bold {CYAN}]\u21c4 NETWORK[/]",
+        if self.conn_stats:
+            cs = self.conn_stats
+
+            # Bandwidth rate
+            rx_rate = cs.get('rx_rate', 0)
+            tx_rate = cs.get('tx_rate', 0)
+            if rx_rate > 0 or tx_rate > 0:
+                rt = Text()
+                rt.append(f"\u2193{format_bytes(rx_rate)}/s", style=SOFT_GREEN)
+                rt.append(f"  \u2191{format_bytes(tx_rate)}/s", style=CYAN)
+                t.add_row("Rate", rt)
+
+            # Unique peers seen
+            u1h = cs.get('unique_1h', 0)
+            u24h = cs.get('unique_24h', 0)
+            u_all = cs.get('unique_all', 0)
+            ut = Text()
+            ut.append(f"{u1h}", style="bold white")
+            ut.append(" 1h", style="dim")
+            ut.append(f"  {u24h}", style="bold white")
+            ut.append(" 24h", style="dim")
+            ut.append(f"  {u_all}", style=f"bold {BTC_ORANGE}")
+            ut.append(" all", style="dim")
+            t.add_row("Seen", ut)
+
+            # Peak / average connections
+            peak = cs.get('peak_24h', 0)
+            avg = cs.get('avg_24h', 0)
+            if peak > 0:
+                st = Text()
+                st.append(f"\u2191{peak}", style=f"bold {NEON_GREEN}")
+                st.append(" peak", style="dim")
+                st.append(f"  \u00f8{avg:.0f}", style="bold white")
+                st.append(" avg", style="dim")
+                t.add_row("Range", st)
+
+            # Churn: connections / disconnections last hour
+            conn_1h = cs.get('connects_1h', 0)
+            disc_1h = cs.get('disconnects_1h', 0)
+            if conn_1h > 0 or disc_1h > 0:
+                ct = Text()
+                ct.append(f"+{conn_1h}", style=SOFT_GREEN)
+                ct.append(f"  -{disc_1h}", style=SOFT_RED)
+                ct.append(" /1h", style="dim")
+                t.add_row("Churn", ct)
+
+            # Average / longest connection duration
+            avg_dur = cs.get('avg_duration', 0)
+            max_dur = cs.get('max_duration', 0)
+            if avg_dur > 0:
+                dt = Text()
+                dt.append(format_uptime(int(avg_dur)), style="bold white")
+                dt.append(" avg", style="dim")
+                if max_dur > 0:
+                    dt.append(f"  {format_uptime(int(max_dur))}", style="dim")
+                    dt.append(" max", style="dim")
+                t.add_row("Duration", dt)
+
+            # Security alerts
+            alerts = cs.get('alerts', [])
+            for alert in alerts[:2]:
+                level = alert.get('level', 'info')
+                msg = alert.get('msg', '')
+                color = SOFT_RED if level == 'warning' else SOFT_YELLOW
+                at = Text()
+                at.append("\u26a0 ", style=f"bold {color}")
+                at.append(msg, style=color)
+                t.add_row("Alert", at)
+
+        return Panel(t, title=f"[bold {CYAN}]\u21c4 P2P PEERS[/]",
                      border_style=CYAN, box=box.ROUNDED)
 
 
 class PriceCard(Static):
-    """Bitcoin price + fees"""
+    """Large figlet BTC price — warden-inspired hero display"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.data: Dict[str, Any] = {}
         self.fees: Dict[str, Any] = {}
+        self.block_time_stats: Dict[str, Any] = {}
 
-    def update_data(self, price: Dict, fees: Dict = None):
+    def update_data(self, price: Dict, fees: Dict = None,
+                    block_time_stats: Dict[str, Any] = None):
         self.data = price
         self.fees = fees or {}
+        if block_time_stats is not None:
+            self.block_time_stats = block_time_stats
         self.refresh()
 
     def render(self) -> Panel:
         if not self.data:
-            return Panel(Text("  Loading price...", style="dim italic"),
-                         title=f"[bold {NEON_GREEN}]$ MARKET[/]",
+            return Panel(Text("  Loading price\u2026", style="dim italic"),
+                         title=f"[bold {NEON_GREEN}]\u20bf BTC PRICE[/]",
                          border_style=DIM_BORDER, box=box.ROUNDED)
 
-        t = Table.grid(padding=(0, 1), expand=True)
-        t.add_column("K", style="dim", width=10)
-        t.add_column("V", style="white")
-
         usd = self.data.get('usd', 0)
-        if usd:
-            pt = Text()
-            pt.append(f"${usd:,.0f}", style=f"bold {NEON_GREEN}")
-            change = self.data.get('usd_24h_change', 0)
-            if change:
-                color = NEON_GREEN if change >= 0 else SOFT_RED
-                arrow = "\u25b2" if change >= 0 else "\u25bc"
-                pt.append(f"  {arrow}{abs(change):.1f}%",
-                          style=f"bold {color}")
-            t.add_row("BTC/USD", pt)
+        if not usd:
+            return Panel(Text("  Price unavailable", style="dim italic"),
+                         title=f"[bold {NEON_GREEN}]\u20bf BTC PRICE[/]",
+                         border_style=DIM_BORDER, box=box.ROUNDED)
 
-            sats = int(100_000_000 / usd) if usd else 0
-            t.add_row("Sats/$", Text(f"{sats:,}", style="bold white"))
+        # Available width inside the panel (borders + padding ≈ 4)
+        card_w = self.size.width - 4 if self.size.width > 0 else 80
+        use_figlet = card_w >= 30
 
-            # Moscow time
-            moscow_mins = sats % 100
-            moscow_hrs = sats // 100
-            t.add_row("Moscow \u23f0",
-                       Text(f"{moscow_hrs}:{moscow_mins:02d}",
-                            style=f"bold {BTC_ORANGE}"))
+        # Render price display
+        if use_figlet:
+            try:
+                fig = pyfiglet.Figlet(font='small')
+                price_str = f"$ {usd:,.0f}"
+                raw = fig.renderText(price_str)
+                lines = [ln for ln in raw.split('\n') if ln.strip()]
+                max_w = max((len(ln) for ln in lines), default=0)
+                # If figlet is wider than card allows, fall back
+                if max_w > card_w - 12:
+                    use_figlet = False
+                else:
+                    lines = [ln.ljust(max_w) for ln in lines]
+                    large_text = '\n'.join(lines)
+            except Exception:
+                use_figlet = False
+
+        figlet_block = Text()
+        if use_figlet:
+            for line in large_text.split('\n'):
+                figlet_block.append(line + '\n', style=f"bold {NEON_GREEN}")
+        else:
+            figlet_block.append(f"\n  $ {usd:,.0f}\n",
+                                style=f"bold {NEON_GREEN}")
+
+        # Build right-side info column (stacked vertically)
+        info = Text()
+
+        # 24h change
+        change = self.data.get('usd_24h_change', 0)
+        if change:
+            color = NEON_GREEN if change >= 0 else SOFT_RED
+            arrow = "\u25b2" if change >= 0 else "\u25bc"
+            info.append("24h  ", style="dim")
+            info.append(f"{arrow}{abs(change):.1f}%",
+                        style=f"bold {color}")
+            info.append("\n")
+
+        # Sats per dollar
+        sats = int(100_000_000 / usd)
+        info.append("Sats ", style="dim")
+        info.append(f"{sats:,}", style="bold white")
+        info.append("\n")
+
+        # Moscow time
+        moscow_mins = sats % 100
+        moscow_hrs = sats // 100
+        info.append("\u23f0   ", style="dim")
+        info.append(f"{moscow_hrs}:{moscow_mins:02d}",
+                    style=f"bold {BTC_ORANGE}")
+        info.append("\n")
 
         # Fee estimates
         if self.fees:
@@ -406,17 +723,244 @@ class PriceCard(Static):
             hour = self.fees.get('hour', 0)
             economy = self.fees.get('economy', 0)
             if fastest:
-                ft = Text()
-                ft.append(f"\u26a1{fastest}", style=f"bold {SOFT_RED}")
-                ft.append(f"  \u25d4{hour}", style=SOFT_YELLOW)
-                ft.append(f"  \u25f7{economy}", style=SOFT_GREEN)
-                ft.append(" sat/vB", style="dim")
-                t.add_row("Fees", ft)
+                info.append("\u26a1   ", style="dim")
+                info.append(f"{fastest}", style=f"bold {SOFT_RED}")
+                info.append(f"/{hour}", style=SOFT_YELLOW)
+                info.append(f"/{economy}", style=SOFT_GREEN)
+                info.append("\n")
 
+        # Hashprice ($/PH/day)
+        hp = self.block_time_stats.get('hashprice')
+        if hp is not None:
+            info.append("\u26cf   ", style="dim")
+            info.append(f"${hp:,.2f}", style=f"bold {NEON_GREEN}")
+            info.append("/PH/d", style="dim")
+            info.append("\n")
+
+        # Source label
         src = self.data.get('source', '')
-        return Panel(t, title=f"[bold {NEON_GREEN}]$ MARKET[/]",
-                     subtitle=f"[dim]{src}[/]" if src else None,
+        if src:
+            info.append("source ", style="dim grey62")
+            info.append(src, style=NEON_GREEN)
+            info.append("\n")
+
+        # Side-by-side layout if enough room, stacked otherwise
+        if card_w >= 40:
+            layout = Table.grid(padding=(0, 2), expand=True)
+            layout.add_column("price", ratio=3)
+            layout.add_column("info", ratio=1)
+            layout.add_row(figlet_block, info)
+        else:
+            figlet_block.append("\n")
+            figlet_block.append_text(info)
+            layout = figlet_block
+
+        return Panel(layout,
+                     title=f"[bold {NEON_GREEN}]\u20bf BTC PRICE[/]",
                      border_style=NEON_GREEN, box=box.ROUNDED)
+
+
+class BlockHeightCard(Static):
+    """Large figlet block height with epoch timing stats"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_height: int = 0
+        self.last_block_time: int = 0
+        self.is_ibd: bool = False
+        self.block_time_stats: Dict[str, Any] = {}
+        self.diff_adj: Dict[str, Any] = {}
+
+    def update_data(self, blocks: int, last_block_time: int = 0,
+                    is_ibd: bool = False,
+                    block_time_stats: Dict[str, Any] = None,
+                    diff_adj: Dict[str, Any] = None):
+        self.block_height = blocks
+        self.last_block_time = last_block_time
+        self.is_ibd = is_ibd
+        if block_time_stats is not None:
+            self.block_time_stats = block_time_stats
+        if diff_adj is not None:
+            self.diff_adj = diff_adj
+        self.refresh()
+
+    def _build_epoch_stats(self) -> Table:
+        """Build a compact stats column for epoch/block timing."""
+        tbl = Table.grid(padding=(0, 1))
+        tbl.add_column("K", style="dim", width=11)
+        tbl.add_column("V", style="white")
+
+        bts = self.block_time_stats
+        da = self.diff_adj
+        height = self.block_height
+
+        # Blocks in current epoch / remaining
+        epoch_start = height - (height % 2016)
+        blocks_in = height - epoch_start
+        blocks_left = 2016 - blocks_in
+        epoch_pct = blocks_in / 2016 * 100
+
+        tbl.add_row("Epoch Blks", Text(f"{blocks_in:,} / 2,016", style="bold white"))
+        tbl.add_row("Remaining", Text(f"{blocks_left:,}", style="white"))
+        tbl.add_row("Progress", _make_bar(epoch_pct, width=12, fill_color=PURPLE))
+
+        # Target: expected blocks at this point vs actual
+        # Each epoch should take 2016 * 600s = ~14 days
+        if bts.get('epoch_avg'):
+            epoch_avg = bts['epoch_avg']
+            # Expected elapsed time for blocks_in blocks at 10min target
+            expected_elapsed = blocks_in * 600
+            actual_elapsed = blocks_in * epoch_avg
+            # Blocks ahead/behind: how many more (or fewer) blocks than
+            # expected given the actual time elapsed
+            expected_blocks = actual_elapsed / 600 if actual_elapsed > 0 else 0
+            delta = blocks_in - expected_blocks
+
+            if delta > 0:
+                delta_text = Text(f"+{delta:.0f} ahead", style=f"bold {NEON_GREEN}")
+            elif delta < 0:
+                delta_text = Text(f"{delta:.0f} behind", style=f"bold {SOFT_RED}")
+            else:
+                delta_text = Text("On target", style=f"bold {NEON_GREEN}")
+            tbl.add_row("Schedule", delta_text)
+
+        # Epoch avg block time
+        if bts.get('epoch_avg'):
+            avg = bts['epoch_avg']
+            mins = avg / 60
+            if avg < 540:       # < 9 min → fast
+                color, label = NEON_GREEN, "Fast"
+            elif avg <= 660:    # 9-11 min → normal
+                color, label = SOFT_GREEN, "Normal"
+            else:               # > 11 min → slow
+                color, label = SOFT_RED, "Slow"
+            vt = Text()
+            vt.append(f"{mins:.1f}m", style=f"bold {color}")
+            vt.append(f"  {label}", style=f"{color}")
+            tbl.add_row("Epoch Avg", vt)
+
+        # 24h avg block time
+        if bts.get('avg_24h'):
+            avg24 = bts['avg_24h']
+            mins24 = avg24 / 60
+            if avg24 < 540:
+                color = NEON_GREEN
+            elif avg24 <= 660:
+                color = SOFT_GREEN
+            else:
+                color = SOFT_RED
+            tbl.add_row("24h Avg", Text(f"{mins24:.1f}m", style=f"bold {color}"))
+
+        # Next difficulty adjustment estimate
+        if da.get('change'):
+            change = da['change']
+            color = NEON_GREEN if change >= 0 else SOFT_RED
+            ct = Text()
+            ct.append(f"{change:+.2f}%", style=f"bold {color}")
+            tbl.add_row("Next Adj", ct)
+
+        return tbl
+
+    def render(self) -> Panel:
+        if not self.block_height:
+            return Panel(Text("  Waiting\u2026", style="dim italic"),
+                         title=f"[bold {BTC_ORANGE}]\u26cf BLOCK HEIGHT[/]",
+                         border_style=DIM_BORDER, box=box.ROUNDED)
+
+        # Available width inside the panel (borders + padding ≈ 4)
+        card_w = self.size.width - 4 if self.size.width > 0 else 120
+        use_figlet = card_w >= 40
+
+        if use_figlet:
+            try:
+                fig = pyfiglet.Figlet(font='small')
+                height_str = str(self.block_height)
+                raw = fig.renderText(height_str)
+                lines = [ln for ln in raw.split('\n') if ln.strip()]
+                max_w = max((len(ln) for ln in lines), default=0)
+                # If figlet output is wider than the card, fall back
+                if max_w > card_w * 0.6:
+                    use_figlet = False
+                else:
+                    lines = [ln.ljust(max_w) for ln in lines]
+                    large_text = '\n'.join(lines)
+            except Exception:
+                use_figlet = False
+
+        # Left side: block height display
+        left = Text()
+        if use_figlet:
+            for line in large_text.split('\n'):
+                left.append(line + '\n', style=f"bold {BTC_ORANGE}")
+        else:
+            left.append(f"\n  {self.block_height:,}\n",
+                        style=f"bold {BTC_ORANGE}")
+
+        # Time since last block — green <10m, yellow 10-20m, red >20m
+        if self.last_block_time > 0 and not self.is_ibd:
+            secs = int(time.time() - self.last_block_time)
+            if secs < 0:
+                secs = 0
+            if secs < 600:
+                color = NEON_GREEN
+            elif secs < 1200:
+                color = SOFT_YELLOW
+            else:
+                color = SOFT_RED
+            left.append(f" Last block: {_format_time_ago(secs)}",
+                        style=f"bold {color}")
+        elif self.is_ibd:
+            left.append(" Syncing\u2026", style=f"bold {SOFT_YELLOW}")
+
+        # Build layout: block height on left, epoch stats on right
+        has_stats = (self.block_time_stats or self.diff_adj) and not self.is_ibd
+        if has_stats and card_w >= 50:
+            layout = Table.grid(padding=(0, 2), expand=True)
+            layout.add_column("block", ratio=1)
+            layout.add_column("stats", ratio=1)
+            layout.add_row(left, self._build_epoch_stats())
+        else:
+            layout = left
+
+        return Panel(layout,
+                     title=f"[bold {BTC_ORANGE}]\u26cf BLOCK HEIGHT[/]",
+                     border_style=BTC_ORANGE, box=box.ROUNDED)
+
+
+class SatoshiCard(Static):
+    """Rotating Satoshi Nakamoto quotes — inspired by warden_terminal"""
+
+    ROTATE_SECS = 30  # advance quote every ~30 seconds
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._quote_idx = random.randint(0, len(SATOSHI_QUOTES) - 1)
+        self._last_rotate = time.monotonic()
+
+    def maybe_rotate(self):
+        """Advance quote if enough time has passed, then refresh."""
+        now = time.monotonic()
+        if now - self._last_rotate >= self.ROTATE_SECS:
+            self._last_rotate = now
+            self._quote_idx = (self._quote_idx + 1) % len(SATOSHI_QUOTES)
+        self.refresh()
+
+    def render(self) -> Panel:
+        q = SATOSHI_QUOTES[self._quote_idx]
+
+        t = Text()
+        t.append("\u201c", style=f"bold {BTC_ORANGE}")
+        t.append(q['text'], style="italic white")
+        t.append("\u201d", style=f"bold {BTC_ORANGE}")
+        t.append(f"\n\n\u2014 Satoshi Nakamoto", style=f"bold {BTC_ORANGE}")
+        t.append(f"\n  {q['date']}", style="dim")
+        t.append(f"  \u2022  {q['source']}", style="dim")
+
+        return Panel(t,
+                     title=f"[bold {BTC_ORANGE}]\u2726 SATOSHI[/]",
+                     subtitle=f"[dim]{self._quote_idx + 1}"
+                              f"/{len(SATOSHI_QUOTES)}[/]",
+                     border_style=BTC_ORANGE, box=box.ROUNDED)
 
 
 class MempoolCard(Static):
@@ -491,12 +1035,16 @@ class BlockchainCard(Static):
         self.data: Dict[str, Any] = {}
         self.hashrate_data: Dict[str, Any] = {}
         self.diff_adj: Dict[str, Any] = {}
+        self.block_time_stats: Dict[str, Any] = {}
 
     def update_data(self, blockchain: Dict, hashrate: Dict = None,
-                    diff_adj: Dict = None):
+                    diff_adj: Dict = None,
+                    last_block_time: int = 0,
+                    block_time_stats: Dict[str, Any] = None):
         self.data = {
             'difficulty': blockchain.get('difficulty', 0),
             'mediantime': blockchain.get('mediantime', 0),
+            'last_block_time': last_block_time,
             'bestblockhash': blockchain.get('bestblockhash', ''),
             'warnings': blockchain.get('warnings', ''),
             'ibd': blockchain.get('initialblockdownload', False),
@@ -504,6 +1052,8 @@ class BlockchainCard(Static):
         }
         self.hashrate_data = hashrate or {}
         self.diff_adj = diff_adj or {}
+        if block_time_stats is not None:
+            self.block_time_stats = block_time_stats
         self.refresh()
 
     def render(self) -> Panel:
@@ -533,6 +1083,16 @@ class BlockchainCard(Static):
         if hr:
             t.add_row("Hashrate",
                        Text(format_hashrate(hr), style="bold white"))
+
+        # Fee revenue as % of block reward
+        fee_pct = self.block_time_stats.get('avg_fee_pct')
+        if fee_pct is not None:
+            ft = Text()
+            fc = NEON_GREEN if fee_pct < 10 else (
+                SOFT_YELLOW if fee_pct < 50 else BTC_ORANGE)
+            ft.append(f"{fee_pct:.1f}%", style=f"bold {fc}")
+            ft.append(" of reward", style="dim")
+            t.add_row("Fee/Rwd", ft)
 
         # Difficulty adjustment
         if self.diff_adj:
@@ -575,8 +1135,9 @@ class BlockchainCard(Static):
                 t.add_row("Last Adj",
                            Text(f"{prev:+.2f}%", style=color))
 
-        # Last block time
-        mt = self.data.get('mediantime', 0)
+        # Last block time — use actual block time, fall back to mediantime
+        bt = self.data.get('last_block_time', 0)
+        mt = bt if bt > 0 else self.data.get('mediantime', 0)
         if mt > 0:
             block_time = datetime.fromtimestamp(mt)
             secs = int((datetime.now() - block_time).total_seconds())
@@ -621,7 +1182,7 @@ class HalvingCard(Static):
     def render(self) -> Panel:
         if not self.data:
             return Panel(Text("  Waiting...", style="dim italic"),
-                         title=f"[bold {BTC_ORANGE}]\u23f3 HALVING[/]",
+                         title=f"[bold {BTC_ORANGE}]1/2 HALVING[/]",
                          border_style=DIM_BORDER, box=box.ROUNDED)
 
         t = Table.grid(padding=(0, 1), expand=True)
@@ -660,8 +1221,167 @@ class HalvingCard(Static):
         t.add_row("Progress",
                    _make_bar(pct, width=15, fill_color=BTC_ORANGE))
 
-        return Panel(t, title=f"[bold {BTC_ORANGE}]\u23f3 HALVING[/]",
+        return Panel(t, title=f"[bold {BTC_ORANGE}]1/2 HALVING[/]",
                      border_style=BTC_ORANGE, box=box.ROUNDED)
+
+
+class RPCCard(Static):
+    """RPC connection monitor — parsed from debug.log"""
+
+    RPC_COLOR = "#FF6E40"  # deep orange for RPC
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.data: Dict[str, Any] = {}
+
+    def update_data(self, rpc_stats: Dict):
+        self.data = rpc_stats
+        self.refresh()
+
+    def render(self) -> Panel:
+        rpc_col = self.RPC_COLOR
+
+        if not self.data or not self.data.get('has_data', False):
+            content = Text()
+            content.append("  No RPC log data found\n",
+                           style="dim italic")
+            content.append("  Enable debug=http in\n",
+                           style="dim")
+            content.append("  bitcoin.conf for full\n",
+                           style="dim")
+            content.append("  RPC monitoring\n\n", style="dim")
+            content.append("  Press ", style="dim")
+            content.append("d", style=f"bold {NEON_GREEN}")
+            content.append(" to enable", style="dim")
+            return Panel(content,
+                         title=f"[bold {rpc_col}]\u2692 RPC[/]",
+                         border_style=DIM_BORDER, box=box.ROUNDED)
+
+        t = Table.grid(padding=(0, 1), expand=True)
+        t.add_column("K", style="dim", width=10)
+        t.add_column("V", style="white")
+
+        d = self.data
+
+        # Total requests
+        total = d.get('total_accepted', 0)
+        ct = Text()
+        ct.append(f"{total:,}", style="bold white")
+        ct.append(" total", style="dim")
+        t.add_row("Requests", ct)
+
+        # Connections by time window
+        a1h = d.get('accepts_1h', 0)
+        a24h = d.get('accepts_24h', 0)
+        if a1h > 0 or a24h > 0:
+            wt = Text()
+            wt.append(str(a1h), style="bold white")
+            wt.append(" 1h", style="dim")
+            wt.append(f"  {a24h}", style="bold white")
+            wt.append(" 24h", style="dim")
+            t.add_row("Accepted", wt)
+
+        # Connection rate
+        rate = d.get('conn_rate_per_min', 0)
+        if rate > 0:
+            rt = Text()
+            rt.append(f"{rate:.1f}", style="bold white")
+            rt.append("/min", style="dim")
+            t.add_row("Rate", rt)
+
+        # Last connection time
+        last_ts = d.get('last_conn_ts', 0)
+        if last_ts > 0:
+            import time as _time
+            ago = int(_time.time() - last_ts)
+            lt = Text()
+            lt.append(_format_time_ago(ago), style=f"bold {NEON_GREEN}")
+            t.add_row("Last", lt)
+
+        # Unique IPs
+        ips_1h = d.get('unique_ips_1h', 0)
+        ips_all = d.get('unique_ips_all', 0)
+        if ips_all > 0:
+            it = Text()
+            it.append(str(ips_1h), style="bold white")
+            it.append(" 1h", style="dim")
+            it.append(f"  {ips_all}", style=f"bold {rpc_col}")
+            it.append(" all", style="dim")
+            t.add_row("IPs", it)
+
+        # Top client IPs (show top 3 inline)
+        top_ips = d.get('top_ips', [])
+        for ip, info in top_ips[:3]:
+            ipt = Text()
+            ipt.append(ip, style=f"bold {CYAN}")
+            ipt.append(f" \u00d7{info['count']:,}", style="dim")
+            t.add_row("", ipt)
+
+        # RPC calls in last hour
+        calls_1h = d.get('total_calls_1h', 0)
+        if calls_1h > 0:
+            t.add_row("Calls/1h",
+                       Text(f"{calls_1h:,}", style="bold white"))
+
+        # Top methods (compact: show top 3)
+        top = d.get('top_methods', [])
+        if top:
+            mt = Text()
+            for i, (method, count) in enumerate(top[:3]):
+                if i:
+                    mt.append("  ", style="default")
+                mt.append(method, style=f"bold {CYAN}")
+                mt.append(f":{count}", style="dim")
+            t.add_row("Methods", mt)
+
+        # Auth failures
+        fails_1h = d.get('auth_fails_1h', 0)
+        fails_all = d.get('auth_fails_all', 0)
+        if fails_all > 0:
+            ft = Text()
+            if fails_1h > 0:
+                ft.append(str(fails_1h), style=f"bold {SOFT_RED}")
+                ft.append(" 1h", style="dim")
+                ft.append("  ", style="default")
+            ft.append(str(fails_all), style=f"bold {SOFT_RED}")
+            ft.append(" total", style="dim")
+            t.add_row("AuthFail", ft)
+
+            # Show last few failure details
+            recent = d.get('recent_auth_fails', [])
+            for detail in recent[-3:]:
+                # Trim timestamp prefix for compact display
+                short = detail
+                if ']' in short:
+                    short = short.split(']', 1)[-1].strip()
+                elif 'Z' in short[:25]:
+                    short = short[25:].strip()
+                if len(short) > 50:
+                    short = short[:47] + '...'
+                dt = Text()
+                dt.append("  \u2022 ", style="dim")
+                dt.append(short, style=f"{SOFT_RED}")
+                t.add_row("", dt)
+        else:
+            t.add_row("AuthFail",
+                       Text("\u2713 none", style=f"bold {NEON_GREEN}"))
+
+        # Security alerts
+        alerts = d.get('alerts', [])
+        for alert in alerts[:2]:
+            level = alert.get('level', 'info')
+            msg = alert.get('msg', '')
+            color = SOFT_RED if level in ('warning', 'critical') \
+                else SOFT_YELLOW
+            at = Text()
+            at.append("\u26a0 ", style=f"bold {color}")
+            at.append(msg, style=color)
+            t.add_row("Alert", at)
+
+        border = SOFT_RED if fails_1h > 0 else rpc_col
+        return Panel(t,
+                     title=f"[bold {rpc_col}]\u2692 RPC[/]",
+                     border_style=border, box=box.ROUNDED)
 
 
 class SystemCard(Static):
@@ -690,6 +1410,14 @@ class SystemCard(Static):
             SOFT_YELLOW if cpu < 85 else SOFT_RED)
         t.add_row("CPU", _make_bar(cpu, width=15, fill_color=cpu_color))
 
+        cpu_temp = self.data.get('cpu_temp')
+        if cpu_temp is not None:
+            temp_color = NEON_GREEN if cpu_temp < 65 else (
+                SOFT_YELLOW if cpu_temp < 80 else SOFT_RED)
+            tt = Text()
+            tt.append(f"{cpu_temp:.0f}°C", style=f"bold {temp_color}")
+            t.add_row("Temp", tt)
+
         mp = self.data.get('mem_percent', 0)
         mem_used = self.data.get('mem_used', 0)
         mem_total = self.data.get('mem_total', 0)
@@ -701,19 +1429,142 @@ class SystemCard(Static):
         mt.append(f" / {format_bytes(mem_total)}", style="dim")
         t.add_row("", mt)
 
+        # Primary disk (Bitcoin data volume if available)
         dp = self.data.get('disk_percent', 0)
         disk_used = self.data.get('disk_used', 0)
         disk_total = self.data.get('disk_total', 0)
+        disk_label = self.data.get('disk_label', '/')
+        lbl = "Disk \u20bf" if disk_label != '/' else "Disk /"
         disk_color = NEON_GREEN if dp < 75 else (
             SOFT_YELLOW if dp < 90 else SOFT_RED)
-        t.add_row("Disk", _make_bar(dp, width=15, fill_color=disk_color))
+        t.add_row(lbl, _make_bar(dp, width=15, fill_color=disk_color))
         dt = Text()
         dt.append(f"{format_bytes(disk_used)}", style="white")
         dt.append(f" / {format_bytes(disk_total)}", style="dim")
         t.add_row("", dt)
 
+        # Secondary: root / (only if different volume)
+        rdp = self.data.get('root_disk_percent')
+        if rdp is not None:
+            rd_used = self.data.get('root_disk_used', 0)
+            rd_total = self.data.get('root_disk_total', 0)
+            rd_color = NEON_GREEN if rdp < 75 else (
+                SOFT_YELLOW if rdp < 90 else SOFT_RED)
+            t.add_row("Disk /",
+                       _make_bar(rdp, width=15, fill_color=rd_color))
+            rdt = Text()
+            rdt.append(f"{format_bytes(rd_used)}", style="white")
+            rdt.append(f" / {format_bytes(rd_total)}", style="dim")
+            t.add_row("", rdt)
+
         return Panel(t, title=f"[bold {DIM_BORDER}]\u2699 SYSTEM[/]",
                      border_style=DIM_BORDER, box=box.ROUNDED)
+
+
+class MarketCard(Static):
+    """Market data: cap, ATH, block subsidy, supply"""
+
+    MARKET_COLOR = "#E040FB"  # pink-purple
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.price_data: Dict[str, Any] = {}
+        self.block_height: int = 0
+
+    def update_data(self, price: Dict, block_height: int = 0):
+        self.price_data = price
+        self.block_height = block_height
+        self.refresh()
+
+    def render(self) -> Panel:
+        mc = self.MARKET_COLOR
+        if not self.price_data:
+            return Panel(Text("  Loading market data\u2026", style="dim italic"),
+                         title=f"[bold {mc}]\u2261 MARKET[/]",
+                         border_style=DIM_BORDER, box=box.ROUNDED)
+
+        t = Table.grid(padding=(0, 1), expand=True)
+        t.add_column("K", style="dim", width=10)
+        t.add_column("V", style="white")
+
+        usd = self.price_data.get('usd', 0)
+
+        # Market cap
+        mcap = self.price_data.get('usd_market_cap', 0)
+        if mcap > 0:
+            if mcap >= 1e12:
+                cap_str = f"${mcap / 1e12:.2f}T"
+            elif mcap >= 1e9:
+                cap_str = f"${mcap / 1e9:.1f}B"
+            else:
+                cap_str = f"${mcap / 1e6:.0f}M"
+            t.add_row("Mkt Cap", Text(cap_str, style=f"bold {NEON_GREEN}"))
+
+        # All-time high
+        ath = self.price_data.get('ath_usd', 0)
+        if ath > 0:
+            at = Text()
+            at.append(f"${ath:,.0f}", style="bold white")
+            t.add_row("ATH", at)
+
+            # Decline from ATH
+            ath_pct = self.price_data.get('ath_change_pct', 0)
+            if ath_pct:
+                dt = Text()
+                if ath_pct < 0:
+                    dt.append(f"{ath_pct:.1f}%", style=f"bold {SOFT_RED}")
+                else:
+                    dt.append(f"+{ath_pct:.1f}%", style=f"bold {NEON_GREEN}")
+                dt.append(" from ATH", style="dim")
+                t.add_row("", dt)
+
+            # ATH date and days since
+            ath_date_str = self.price_data.get('ath_date', '')
+            if ath_date_str:
+                try:
+                    from datetime import datetime as _dt
+                    ath_dt = _dt.fromisoformat(
+                        ath_date_str.replace('Z', '+00:00'))
+                    from datetime import timezone
+                    now_utc = _dt.now(timezone.utc)
+                    days_since = (now_utc - ath_dt).days
+                    dd = Text()
+                    dd.append(ath_dt.strftime("%b %d, %Y"), style="white")
+                    dd.append(f"  ({days_since:,}d)", style="dim")
+                    t.add_row("ATH Date", dd)
+                except (ValueError, TypeError):
+                    pass
+
+        # Block subsidy
+        if self.block_height > 0:
+            sub_btc = block_subsidy(self.block_height)
+            st = Text()
+            st.append(f"{sub_btc:.4g} BTC", style=f"bold {BTC_ORANGE}")
+            if usd > 0:
+                sub_usd = sub_btc * usd
+                st.append(f"  ${sub_usd:,.0f}", style=SOFT_GREEN)
+            t.add_row("Subsidy", st)
+
+        # Supply: mined / remaining / progress
+        if self.block_height > 0:
+            mined = total_mined(self.block_height)
+            remaining = MAX_SUPPLY - mined
+            mt = Text()
+            mt.append(f"{mined:,.0f}", style="bold white")
+            mt.append(" BTC", style="dim")
+            t.add_row("Mined", mt)
+
+            rt = Text()
+            rt.append(f"{remaining:,.0f}", style=f"bold {SOFT_YELLOW}")
+            rt.append(" BTC", style="dim")
+            t.add_row("Remaining", rt)
+
+            pct = mined / MAX_SUPPLY * 100
+            t.add_row("Supply",
+                       _make_bar(pct, width=15, fill_color=BTC_ORANGE))
+
+        return Panel(t, title=f"[bold {mc}]\u2261 MARKET[/]",
+                     border_style=mc, box=box.ROUNDED)
 
 
 class ConfigCard(Static):
@@ -796,6 +1647,343 @@ class ConfigCard(Static):
                      border_style=DIM_BORDER, box=box.ROUNDED)
 
 
+# ── Matrix Rain Animation ──────────────────────────────────────────────
+
+_MATRIX_CHARS = (
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    "@#$%^&*+-=<>~"
+    "\uff8a\uff90\uff8b\uff70\uff73\uff7c\uff85\uff93\uff86\uff7b\uff9c\uff82\uff75\uff98\uff71\uff8e\uff83\uff8f\uff79\uff92\uff74\uff76\uff77\uff91\uff95\uff97\uff7e\uff88\uff7d\uff80\uff87\uff8d"
+)
+
+# Green gradient: bright head → dark tail  (fg on transparent bg)
+_RAIN_STYLES_FG = [
+    "#ffffff",   # 0 – head (white-hot)
+    "#00ff41",   # 1 – bright green
+    "#00dd33",   # 2
+    "#00aa22",   # 3
+    "#007718",   # 4
+    "#004d10",   # 5
+    "#003308",   # 6 – very dim
+]
+
+# Fade-in scrim colours (from nearly invisible → dark)
+_SCRIM_LEVELS = [
+    "rgba(0,0,0,0.0)",
+    "rgba(0,0,0,0.15)",
+    "rgba(0,0,0,0.30)",
+    "rgba(0,0,0,0.45)",
+    "rgba(0,0,0,0.58)",
+    "rgba(0,0,0,0.68)",
+    "rgba(0,0,0,0.75)",
+]
+
+
+class _RainCanvas(Static):
+    """Custom widget that only paints rain characters; blank cells are
+    fully transparent so the dashboard underneath shows through."""
+
+    DEFAULT_CSS = """
+    _RainCanvas {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+    }
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._frame: Text = Text("")
+
+    def set_frame(self, frame: Text) -> None:
+        self._frame = frame
+        self.refresh()
+
+    def render(self) -> Text:
+        return self._frame
+
+
+class MatrixRainScreen(ModalScreen):
+    """Full-screen Matrix code-rain overlay triggered on new block.
+
+    The animation goes *over* the current dashboard:
+    • Phase 1 (0-0.8s)  – sparse glitch flicker fades in
+    • Phase 2 (0.8-4.2s) – full rain streams
+    • Phase 3 (4.2-5.0s) – rain thins out, dashboard reappears
+    The scrim (dark tint) fades in/out so the dashboard is always
+    partially visible underneath.
+    """
+
+    DURATION = 5.0  # seconds
+    _FADE_IN = 0.8   # seconds to ramp up
+    _FADE_OUT = 0.8   # seconds to ramp down
+
+    DEFAULT_CSS = """
+    MatrixRainScreen {
+        background: transparent;
+    }
+    """
+
+    def __init__(self, block_height: int = 0,
+                 banner_text: str = "") -> None:
+        super().__init__()
+        self.block_height = block_height
+        self.banner_text = banner_text or f"  \u26cf  NEW BLOCK {block_height:,}  \u26cf  "
+        self._drops: list = []
+        self._cols = 0
+        self._rows = 0
+        self._start = 0.0
+        self._grid: list = []
+        self._canvas: _RainCanvas | None = None
+
+    def compose(self) -> ComposeResult:
+        self._canvas = _RainCanvas()
+        yield self._canvas
+
+    def on_mount(self) -> None:
+        self._start = time.monotonic()
+        size = self.app.size
+        self._cols = max(size.width, 20)
+        self._rows = max(size.height, 10)
+
+        rc = random.choice
+        mc = _MATRIX_CHARS
+        self._grid = [
+            [rc(mc) for _ in range(self._cols)]
+            for _ in range(self._rows)
+        ]
+
+        # Stagger drops — some already mid-screen for instant visual
+        self._drops = []
+        for _ in range(self._cols):
+            self._drops.append({
+                'y': random.uniform(-self._rows * 0.5, self._rows * 0.3),
+                'speed': random.uniform(0.4, 1.8),
+                'length': random.randint(4, min(22, self._rows)),
+                'active': True,
+            })
+
+        # Render first frame immediately so there's no blank flash
+        self._canvas.set_frame(self._render_frame(0.0))
+        self._timer = self.set_interval(1 / 16, self._tick)
+
+    def _tick(self) -> None:
+        elapsed = time.monotonic() - self._start
+        if elapsed >= self.DURATION:
+            self.dismiss()
+            return
+
+        # Advance drops
+        for drop in self._drops:
+            if not drop['active']:
+                continue
+            drop['y'] += drop['speed']
+            if drop['y'] - drop['length'] > self._rows:
+                # During fade-out, don't respawn — let screen clear
+                if elapsed > self.DURATION - self._FADE_OUT:
+                    drop['active'] = False
+                    continue
+                drop['y'] = random.uniform(-8, -1)
+                drop['speed'] = random.uniform(0.4, 1.8)
+                drop['length'] = random.randint(4, min(22, self._rows))
+
+        # Flicker: mutate random chars
+        rc = random.choice
+        ri = random.randint
+        mc = _MATRIX_CHARS
+        for _ in range(self._cols // 3):
+            self._grid[ri(0, self._rows - 1)][ri(0, self._cols - 1)] = rc(mc)
+
+        self._canvas.set_frame(self._render_frame(elapsed))
+
+        # Fade scrim in/out by adjusting screen background
+        scrim = self._scrim_for(elapsed)
+        self.styles.background = scrim
+
+    def _scrim_for(self, elapsed: float) -> str:
+        """Return a scrim colour based on the animation phase."""
+        n = len(_SCRIM_LEVELS) - 1
+        if elapsed < self._FADE_IN:
+            # Fade in
+            t = elapsed / self._FADE_IN
+            idx = int(t * n)
+        elif elapsed > self.DURATION - self._FADE_OUT:
+            # Fade out
+            remaining = self.DURATION - elapsed
+            t = remaining / self._FADE_OUT
+            idx = int(t * n)
+        else:
+            idx = n  # full scrim
+        return _SCRIM_LEVELS[min(idx, n)]
+
+    def _density_for(self, elapsed: float) -> float:
+        """Fraction of columns that should show rain (0.0–1.0)."""
+        if elapsed < self._FADE_IN:
+            return elapsed / self._FADE_IN
+        if elapsed > self.DURATION - self._FADE_OUT:
+            return max(0.0, (self.DURATION - elapsed) / self._FADE_OUT)
+        return 1.0
+
+    def _render_frame(self, elapsed: float) -> Text:
+        cols, rows = self._cols, self._rows
+        n_styles = len(_RAIN_STYLES_FG)
+        density = self._density_for(elapsed)
+
+        # Determine which columns are "active" at current density
+        # Use a stable per-column hash so columns don't flicker on/off
+        active_cols = set()
+        for c in range(cols):
+            # Threshold based on column's hash position
+            if ((c * 7 + 3) % cols) / cols < density:
+                active_cols.add(c)
+
+        # Glitch phase: random scattered single characters
+        glitch_cells: set = set()
+        if elapsed < self._FADE_IN:
+            glitch_pct = 0.03 * (elapsed / self._FADE_IN)
+            n_glitch = int(rows * cols * glitch_pct)
+            ri = random.randint
+            for _ in range(n_glitch):
+                glitch_cells.add((ri(0, rows - 1), ri(0, cols - 1)))
+
+        # Build per-cell style index
+        style_map = [[-1] * cols for _ in range(rows)]
+        for c, drop in enumerate(self._drops):
+            if c not in active_cols or not drop['active']:
+                continue
+            head_y = int(drop['y'])
+            length = drop['length']
+            for i in range(length):
+                r = head_y - i
+                if 0 <= r < rows:
+                    idx = int(i / length * n_styles)
+                    idx = min(idx, n_styles - 1)
+                    cur = style_map[r][c]
+                    if cur == -1 or idx < cur:
+                        style_map[r][c] = idx
+
+        # Add glitch cells (bright green flicker)
+        for gr, gc in glitch_cells:
+            if style_map[gr][gc] == -1:
+                style_map[gr][gc] = 1  # bright green
+
+        # Banner
+        banner = self.banner_text
+        show_banner = elapsed > 0.5
+        banner_row = rows // 2
+        banner_start = max(0, (cols - len(banner)) // 2)
+        banner_end = min(cols, banner_start + len(banner))
+        pulse = 1.0 if int(elapsed * 6) % 2 == 0 else 0.7
+
+        grid = self._grid
+        output = Text()
+        for r in range(rows):
+            if r > 0:
+                output.append("\n")
+            row_styles = style_map[r]
+            row_chars = grid[r]
+            is_banner_row = show_banner and r == banner_row
+
+            c = 0
+            while c < cols:
+                # Banner region
+                if is_banner_row and banner_start <= c < banner_end:
+                    bi = c - banner_start
+                    if pulse > 0.9:
+                        output.append(banner[bi],
+                                      style=f"bold {BTC_ORANGE} on #1a0a00")
+                    else:
+                        output.append(banner[bi],
+                                      style=f"{BTC_ORANGE} on #1a0a00")
+                    c += 1
+                    continue
+
+                si = row_styles[c]
+                if si >= 0:
+                    # Rain character — draw with colour, NO background
+                    bold = "bold " if si == 0 else ""
+                    run = [row_chars[c]]
+                    style_str = f"{bold}{_RAIN_STYLES_FG[si]}"
+                    j = c + 1
+                    while j < cols:
+                        if is_banner_row and j >= banner_start:
+                            break
+                        if row_styles[j] != si:
+                            break
+                        run.append(row_chars[j])
+                        j += 1
+                    output.append("".join(run), style=style_str)
+                else:
+                    # Blank cell — space with NO style → transparent
+                    j = c + 1
+                    while j < cols:
+                        if is_banner_row and j >= banner_start:
+                            break
+                        if row_styles[j] != -1:
+                            break
+                        j += 1
+                    output.append(" " * (j - c))
+                c = j
+
+        return output
+
+    def on_key(self, event) -> None:
+        """Any key press dismisses the animation early."""
+        self.dismiss()
+
+
+# ── Confirm Debug Modal ────────────────────────────────────────────────
+
+class ConfirmDebugScreen(ModalScreen[bool]):
+    """Modal asking user to enable debug=http in bitcoin.conf."""
+
+    CSS = """
+    ConfirmDebugScreen {
+        align: center middle;
+    }
+    #debug-dialog {
+        width: 64;
+        height: auto;
+        border: thick $accent;
+        background: #111111;
+        padding: 1 2;
+    }
+    #debug-dialog Static {
+        width: 100%;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
+    #debug-buttons {
+        width: 100%;
+        height: auto;
+        align-horizontal: center;
+    }
+    #debug-buttons Button {
+        margin: 0 2;
+    }
+    """
+
+    def __init__(self, conf_path: Path) -> None:
+        super().__init__()
+        self.conf_path = conf_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="debug-dialog"):
+            yield Static(
+                f"[bold {BTC_ORANGE}]Enable RPC Debug Logging?[/]\n\n"
+                f"This will add [bold]debug=http[/] to:\n"
+                f"[dim]{self.conf_path}[/]\n\n"
+                f"and activate it immediately via RPC."
+            )
+            with Center(id="debug-buttons"):
+                yield Button("Yes, enable", variant="success", id="btn-yes")
+                yield Button("Cancel", variant="error", id="btn-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-yes")
+
+
 # ── Main App ───────────────────────────────────────────────────────────
 
 class BitcoinTUI(App):
@@ -816,23 +2004,13 @@ class BitcoinTUI(App):
         background: #111111;
         padding: 0 1;
     }
-    .cards-row {
-        height: 1fr;
-        min-height: 10;
+    #dashboard-grid {
+        layout: grid;
+        grid-gutter: 1;
     }
     .card {
-        width: 1fr;
         height: 100%;
-        margin: 0 1 0 0;
         overflow-y: auto;
-    }
-    #config-row {
-        display: none;
-        height: auto;
-        max-height: 14;
-    }
-    #config-row .card {
-        height: auto;
     }
     Footer {
         background: #111111;
@@ -841,9 +2019,11 @@ class BitcoinTUI(App):
 
     BINDINGS = [
         ("q", "quit",          "Quit"),
-        ("r", "refresh",       "Refresh"),
+        ("R", "refresh",       "Refresh"),
+        ("r", "rain",          "Rain"),
         ("c", "toggle_config", "Config"),
         ("l", "view_logs",     "Logs"),
+        ("d", "enable_rpc_debug", "Debug"),
     ]
 
     def __init__(self, datadir: Optional[str] = None):
@@ -854,7 +2034,13 @@ class BitcoinTUI(App):
         self._refresh_interval = self.config.get_display_config().get(
             'refresh_interval', 5)
         self._sync_tracker = SyncTracker()
+        self._peer_tracker = PeerTracker()
+        self._rpc_monitor = RPCMonitor()
         self._shutting_down = False
+        self._last_block_height: int = 0
+        self._block_time_stats: Dict[str, Any] = {}
+        self._show_startup_rain = True
+        self._current_layout: Optional[int] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -862,17 +2048,23 @@ class BitcoinTUI(App):
         self.status_bar = StatusBar()
         yield self.status_bar
 
-        # Row 1: Node | Network | Price
-        with Horizontal(classes="cards-row"):
+        with Grid(id="dashboard-grid"):
+            # Hero row: Block Height (spans 2 cols) | Price
+            self.block_height_card = BlockHeightCard(
+                classes="card", id="large-block-height")
+            yield self.block_height_card
+            self.price_card = PriceCard(classes="card")
+            yield self.price_card
+
+            # Row 1: Node | Network | Market
             self.node_card = NodeCard(classes="card")
             yield self.node_card
             self.network_card = NetworkCard(classes="card")
             yield self.network_card
-            self.price_card = PriceCard(classes="card")
-            yield self.price_card
+            self.market_card = MarketCard(classes="card")
+            yield self.market_card
 
-        # Row 2: Mempool | Blockchain | Halving
-        with Horizontal(classes="cards-row"):
+            # Row 2: Mempool | Blockchain | Halving
             self.mempool_card = MempoolCard(classes="card")
             yield self.mempool_card
             self.blockchain_card = BlockchainCard(classes="card")
@@ -880,27 +2072,69 @@ class BitcoinTUI(App):
             self.halving_card = HalvingCard(classes="card")
             yield self.halving_card
 
-        # Row 3: System (full width)
-        with Horizontal(classes="cards-row"):
+            # Row 3: RPC | System | Satoshi Quotes
+            self.rpc_card = RPCCard(classes="card")
+            yield self.rpc_card
             self.system_card = SystemCard(classes="card")
             yield self.system_card
-
-        # Config (hidden by default, toggle with 'c')
-        if self.datadir:
-            with Horizontal(id="config-row"):
-                self.config_card = ConfigCard(self.datadir, classes="card")
-                yield self.config_card
+            self.satoshi_card = SatoshiCard(classes="card")
+            yield self.satoshi_card
 
         yield Footer()
+
+    def _apply_layout(self, width: int, height: int) -> None:
+        """Adjust grid columns/rows based on terminal size."""
+        if width >= 120:
+            cols = 3
+        elif width >= 80:
+            cols = 2
+        else:
+            cols = 1
+
+        if cols == self._current_layout:
+            return
+        self._current_layout = cols
+
+        grid = self.query_one("#dashboard-grid")
+        hero = self.block_height_card
+
+        grid.styles.grid_size_columns = cols
+
+        if cols == 3:
+            # 4 rows: hero(9) + 3×1fr
+            hero.styles.column_span = 2
+            grid.styles.grid_size_rows = 4
+            grid.styles.grid_rows = "9 1fr 1fr 1fr"
+            grid.styles.overflow_y = "hidden"
+        elif cols == 2:
+            # 6 rows: hero(7) + 5×1fr
+            hero.styles.column_span = 2
+            grid.styles.grid_size_rows = 6
+            grid.styles.grid_rows = "7 1fr 1fr 1fr 1fr 1fr"
+            grid.styles.overflow_y = "auto"
+        else:
+            # 1 col, all stacked, scrollable
+            hero.styles.column_span = 1
+            grid.styles.grid_size_rows = 11
+            grid.styles.grid_rows = "7 " + " ".join(["1fr"] * 10)
+            grid.styles.overflow_y = "auto"
+
+    def on_resize(self, event) -> None:
+        self._apply_layout(event.size.width, event.size.height)
 
     def on_mount(self) -> None:
         self.title = "Bitcoin Terminal"
         self.sub_title = str(self.datadir) if self.datadir else "No datadir"
 
+        self._apply_layout(self.size.width, self.size.height)
+
         if self.datadir and self.datadir.exists():
             env_rpc = self.config.get_rpc_config()
             self.rpc = BitcoinRPC.from_datadir(self.datadir,
                                                 env_config=env_rpc)
+            # Point RPC monitor at debug.log
+            log_path = self._get_log_path()
+            self._rpc_monitor.set_log_path(log_path)
 
         self.refresh_data()
         self.set_interval(self._refresh_interval, self.refresh_data)
@@ -913,7 +2147,16 @@ class BitcoinTUI(App):
     def _fetch_and_update(self) -> None:
         if not self.rpc or self._shutting_down:
             return
-        data = _fetch_all_data(self.rpc)
+        data = _fetch_all_data(self.rpc,
+                               datadir=str(self.datadir)
+                               if self.datadir else None)
+        # Update P2P peer tracker (thread-safe: only called from worker)
+        peers = data.get('peers', [])
+        network = data.get('network', {})
+        if peers or network:
+            data['peer_stats'] = self._peer_tracker.update(peers, network)
+        # Update RPC monitor from debug.log
+        data['rpc_stats'] = self._rpc_monitor.update()
         if not self._shutting_down:
             self.call_from_thread(self._apply_data, data)
 
@@ -949,14 +2192,76 @@ class BitcoinTUI(App):
         headers = blockchain.get('headers', 0)
         sync_info = self._sync_tracker.update(blocks, headers)
 
+        # Startup rain on first successful load
+        if self._show_startup_rain and blocks > 0:
+            self._show_startup_rain = False
+            self._last_block_height = blocks
+            self.push_screen(MatrixRainScreen(
+                block_height=blocks,
+                banner_text="  \u20bf  Welcome to Bitcoin Node Terminal  \u20bf  ",
+            ))
+        else:
+            # Detect new block (skip during IBD and first load)
+            if (blocks > 0
+                    and self._last_block_height > 0
+                    and blocks > self._last_block_height
+                    and not is_ibd):
+                self.push_screen(MatrixRainScreen(block_height=blocks))
+            self._last_block_height = blocks
+
+        # ── Block timing stats & derived metrics (compute early) ──
+        bts = data.get('block_time_stats')
+        if bts:
+            self._block_time_stats = bts
+
+        usd = price.get('usd', 0)
+        net_hashrate = hashrate.get('hashrate', 0)  # H/s
+        if usd > 0 and net_hashrate > 0 and headers > 0:
+            subsidy = block_subsidy(headers)
+            daily_rev = subsidy * 144 * usd
+            hashrate_ph = net_hashrate / 1e15  # H/s -> PH/s
+            if hashrate_ph > 0:
+                self._block_time_stats['hashprice'] = daily_rev / hashrate_ph
+
+        hr_ath = hashrate.get('hashrate_ath', 0)
+        if hr_ath > 0 and net_hashrate > 0:
+            self._block_time_stats['hashrate_ath'] = hr_ath
+            self._block_time_stats['hashrate_dd'] = (
+                (1 - net_hashrate / hr_ath) * 100)
+
+        # ── Update cards ──
         self.node_card.update_data(blockchain, network, uptime,
                                    sync_info=sync_info)
-        self.network_card.update_data(network, peers)
+        conn_stats = data.get('peer_stats', {})
+        self.network_card.update_data(network, peers, conn_stats=conn_stats)
         self.mempool_card.update_data(mempool, is_ibd=is_ibd)
         self.blockchain_card.update_data(blockchain, hashrate=hashrate,
-                                         diff_adj=diff_adj)
-        self.price_card.update_data(price, fees=fees)
+                                         diff_adj=diff_adj,
+                                         last_block_time=data.get(
+                                             'last_block_time', 0),
+                                         block_time_stats=self._block_time_stats)
+        self.price_card.update_data(price, fees=fees,
+                                    block_time_stats=self._block_time_stats)
         self.system_card.update_data(system)
+
+        # Market card (market cap, ATH, subsidy, supply)
+        self.market_card.update_data(price, block_height=blocks)
+
+        # Block height hero card (with epoch stats)
+        self.block_height_card.update_data(
+            blocks,
+            last_block_time=data.get('last_block_time', 0),
+            is_ibd=is_ibd,
+            block_time_stats=self._block_time_stats,
+            diff_adj=diff_adj,
+        )
+
+        # Rotate Satoshi quote
+        self.satoshi_card.maybe_rotate()
+
+        # RPC monitor
+        rpc_stats = data.get('rpc_stats', {})
+        self.rpc_card.update_data(rpc_stats)
 
         # Halving: use headers (network tip) so number is correct
         # even during initial sync
@@ -972,17 +2277,36 @@ class BitcoinTUI(App):
         self.status_bar.blocks = blocks
         self.status_bar.peers = network.get('connections', 0)
         self.status_bar.btc_price = price.get('usd', 0)
+        self.status_bar.epoch_avg = self._block_time_stats.get(
+            'epoch_avg', 0) or 0.0
+        self.status_bar.hashprice = self._block_time_stats.get(
+            'hashprice', 0) or 0.0
+        self.status_bar.fee_pct = self._block_time_stats.get(
+            'avg_fee_pct', 0) or 0.0
 
     def action_refresh(self) -> None:
         self.refresh_data()
+        self.satoshi_card._quote_idx = (
+            self.satoshi_card._quote_idx + 1) % len(SATOSHI_QUOTES)
+        self.satoshi_card.refresh()
         self.notify("Refreshed", timeout=1)
 
+    def action_rain(self) -> None:
+        """Trigger Matrix code rain on demand."""
+        height = self._last_block_height or 0
+        self.push_screen(MatrixRainScreen(block_height=height))
+
     def action_toggle_config(self) -> None:
-        try:
-            container = self.query_one("#config-row")
-            container.display = not container.display
-        except Exception:
-            pass
+        if self.datadir:
+            conf_path = self.datadir / 'bitcoin.conf'
+            subversion = ''
+            if self.node_card.data and isinstance(self.node_card.data, dict):
+                subversion = self.node_card.data.get('subversion', '')
+            system_metrics = getattr(self.system_card, 'data', {})
+            block_time_stats = self._block_time_stats
+            self.push_screen(ConfigScreen(conf_path, subversion,
+                                          system_metrics, block_time_stats,
+                                          rpc=self.rpc))
 
     def action_view_logs(self) -> None:
         log_path = self._get_log_path()
@@ -1007,6 +2331,79 @@ class BitcoinTUI(App):
     def action_quit(self) -> None:
         self._shutting_down = True
         self.exit()
+
+    def action_enable_rpc_debug(self) -> None:
+        """Prompt to enable debug=http in bitcoin.conf."""
+        if not self.datadir:
+            self.notify("No data directory configured", severity="error")
+            return
+        conf_path = self.datadir / 'bitcoin.conf'
+        # Check if already enabled
+        if conf_path.exists():
+            try:
+                content = conf_path.read_text(encoding='utf-8')
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith('#'):
+                        continue
+                    if 'debug=http' in stripped or 'debug=1' in stripped:
+                        self.notify("debug=http is already enabled",
+                                    timeout=3)
+                        return
+            except OSError:
+                pass
+
+        def on_confirm(result: bool) -> None:
+            if not result:
+                return
+            self._write_debug_http(conf_path)
+
+        self.push_screen(
+            ConfirmDebugScreen(conf_path=conf_path),
+            callback=on_confirm,
+        )
+
+    def _write_debug_http(self, conf_path: Path) -> None:
+        """Append debug=http to bitcoin.conf and activate via RPC."""
+        try:
+            with open(conf_path, 'a', encoding='utf-8') as f:
+                f.write('\n# Added by Bitcoin Terminal — '
+                        'enables RPC connection monitoring\n')
+                f.write('debug=http\n')
+        except OSError as e:
+            self.notify(f"Failed to write config: {e}",
+                        severity="error", timeout=5)
+            return
+
+        # Activate at runtime via RPC — no restart needed
+        rpc_ok = False
+        if self.rpc:
+            try:
+                self.rpc.call('logging', [["http"]])
+                rpc_ok = True
+            except Exception:
+                pass
+
+        if rpc_ok:
+            self.notify(
+                "debug=http enabled and activated live",
+                title="\u2713 RPC Debug On",
+                timeout=5,
+            )
+        else:
+            self.notify(
+                "Added debug=http to bitcoin.conf\n"
+                "Restart bitcoind to apply",
+                title="\u2713 Config Updated",
+                timeout=8,
+            )
+
+        # Reload the config card if visible
+        try:
+            self.config_card.load_config()
+            self.config_card.refresh()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

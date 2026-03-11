@@ -1,6 +1,6 @@
 """
 Main entry point for Bitcoin Terminal
-Smart launcher: scans only if needed, then launches TUI
+Smart launcher: runs setup wizard on first run, then launches TUI
 """
 
 import sys
@@ -14,6 +14,34 @@ from rich.panel import Panel
 from rich import box
 
 console = Console()
+
+
+def run_setup_wizard(config: Config) -> bool:
+    """Run the interactive setup wizard. Returns True if completed."""
+    from textual.app import App, ComposeResult
+    from bitcoin_terminal.setup_wizard import SetupWizard
+
+    class WizardApp(App):
+        CSS = "Screen { background: #0a0a0a; }"
+
+        def __init__(self, cfg: Config):
+            super().__init__()
+            self._cfg = cfg
+            self.wizard_completed = False
+
+        def on_mount(self) -> None:
+            self.push_screen(
+                SetupWizard(self._cfg),
+                callback=self._on_wizard_done,
+            )
+
+        def _on_wizard_done(self, result: bool) -> None:
+            self.wizard_completed = bool(result)
+            self.exit()
+
+    app = WizardApp(config)
+    app.run()
+    return app.wizard_completed
 
 
 def main():
@@ -43,6 +71,12 @@ def main():
         help='Force re-scan even if directory is configured'
     )
 
+    parser.add_argument(
+        '--setup',
+        action='store_true',
+        help='Run the setup wizard (even if already configured)'
+    )
+
     args = parser.parse_args()
 
     try:
@@ -52,6 +86,15 @@ def main():
         if args.command == 'scan' or args.force_scan:
             run_scan(config)
             return
+
+        # Run setup wizard on first run or if --setup flag is passed
+        if args.setup or config.is_first_run():
+            completed = run_setup_wizard(config)
+            if not completed:
+                console.print("\n[yellow]Setup cancelled.[/yellow]")
+                sys.exit(0)
+            # Reload config after wizard saves
+            config = Config()
 
         # Check if user provided datadir via command line
         if args.datadir:
@@ -75,13 +118,13 @@ def main():
             # Valid directory found in config
             console.print(Panel(
                 f"[green]✓ Found configured directory:[/green]\n{datadir}\n\n"
-                "[dim]Use --force-scan to search again[/dim]",
+                "[dim]Use --setup to re-run the setup wizard[/dim]",
                 border_style="green",
                 box=box.ROUNDED
             ))
             launch_tui(datadir)
         else:
-            # No valid directory - run scan first
+            # No valid directory after wizard — try auto-scan fallback
             console.print(Panel(
                 "[yellow]⚠️  No Bitcoin directory configured[/yellow]\n\n"
                 "[white]Running automatic scan...[/white]",
@@ -109,7 +152,9 @@ def main():
                     "[red]❌ No Bitcoin directories found[/red]\n\n"
                     "[yellow]Please ensure Bitcoin Core is installed and has been run at least once.[/yellow]\n\n"
                     "[dim]You can also specify a directory manually:\n"
-                    "python -m bitcoin_terminal --datadir /path/to/bitcoin[/dim]",
+                    "python -m bitcoin_terminal --datadir /path/to/bitcoin\n"
+                    "Or run the setup wizard:\n"
+                    "python -m bitcoin_terminal --setup[/dim]",
                     title="[bold]Scan Failed[/bold]",
                     border_style="red",
                     box=box.ROUNDED

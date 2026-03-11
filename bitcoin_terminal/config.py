@@ -49,19 +49,53 @@ class Config:
         # Reload environment
         load_dotenv(self.env_path, override=True)
 
+    def set_rpc_config(self, host: str = '', port: int = 0,
+                       user: str = '', password: str = ''):
+        """Save RPC configuration to .env"""
+        if host:
+            set_key(self.env_path, 'BITCOIN_RPC_HOST', host)
+        if port:
+            set_key(self.env_path, 'BITCOIN_RPC_PORT', str(port))
+        if user:
+            set_key(self.env_path, 'BITCOIN_RPC_USER', user)
+        if password:
+            set_key(self.env_path, 'BITCOIN_RPC_PASSWORD', password)
+        load_dotenv(self.env_path, override=True)
+
+    def set_display_config(self, refresh_interval: int = 0,
+                           theme: str = ''):
+        """Save display configuration to .env"""
+        if refresh_interval:
+            set_key(self.env_path, 'REFRESH_INTERVAL', str(refresh_interval))
+        if theme:
+            set_key(self.env_path, 'THEME', theme)
+        load_dotenv(self.env_path, override=True)
+
+    def is_first_run(self) -> bool:
+        """Check if this is the first time the app is running."""
+        return not self.get_datadir()
+
     def get_rpc_config(self) -> dict:
         """Get RPC configuration from .env"""
+        try:
+            port = int(os.getenv('BITCOIN_RPC_PORT', '8332'))
+        except (ValueError, TypeError):
+            port = 8332
         return {
             'host': os.getenv('BITCOIN_RPC_HOST', '127.0.0.1'),
-            'port': int(os.getenv('BITCOIN_RPC_PORT', '8332')),
+            'port': port,
             'user': os.getenv('BITCOIN_RPC_USER', ''),
             'password': os.getenv('BITCOIN_RPC_PASSWORD', ''),
         }
 
     def get_display_config(self) -> dict:
         """Get display configuration from .env"""
+        try:
+            refresh = int(os.getenv('REFRESH_INTERVAL', '5'))
+        except (ValueError, TypeError):
+            refresh = 5
         return {
-            'refresh_interval': int(os.getenv('REFRESH_INTERVAL', '5')),
+            'refresh_interval': refresh,
             'theme': os.getenv('THEME', 'dark'),
         }
 
