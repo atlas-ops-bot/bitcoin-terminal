@@ -20,15 +20,15 @@ if requirements.exists():
 
 setup(
     name="bitcoin-terminal",
-    version="0.1.0",
+    version="0.1.0-beta.1",
     author="Bitcoin Terminal Contributors",
     description="A beautiful TUI for Bitcoin Node monitoring",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/bitcoin-terminal",
+    url="https://github.com/atlas-ops-bot/bitcoin-terminal",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Topic :: Software Development :: User Interfaces",
         "License :: OSI Approved :: MIT License",

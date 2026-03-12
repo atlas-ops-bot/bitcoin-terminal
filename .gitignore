@@ -40,6 +40,9 @@ config.ini
 .price_cache.json
 **/.price_cache.json
 
+# Display settings (user preferences)
+.display_settings.json
+
 # OS
 .DS_Store
 Thumbs.db

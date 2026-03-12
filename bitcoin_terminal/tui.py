@@ -23,6 +23,9 @@ from bitcoin_terminal.config import Config
 from bitcoin_terminal.rpc import BitcoinRPC
 from bitcoin_terminal.log_view import LogScreen
 from bitcoin_terminal.config_screen import ConfigScreen
+from bitcoin_terminal.display_settings import (
+    load_display_settings, DisplaySettingsScreen,
+)
 import pyfiglet
 
 from bitcoin_terminal.ansi_utils import (
@@ -307,7 +310,7 @@ class BitcoinHeader(Static):
 
 
 class StatusBar(Static):
-    """Live status bar"""
+    """Live status bar with configurable item visibility."""
 
     status = reactive("offline")
     blocks = reactive(0)
@@ -319,47 +322,61 @@ class StatusBar(Static):
     hashprice = reactive(0.0)
     fee_pct = reactive(0.0)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.visible_items: Dict[str, bool] = {
+            'status': True, 'chain': True, 'blocks': True,
+            'peers': True, 'price': True, 'hashprice': True,
+            'epoch_avg': True, 'fee_pct': True, 'time': True,
+        }
+
     def render(self) -> Text:
         line = Text()
+        vis = self.visible_items
+        sep = ("  \u2502  ", DIM_BORDER)
 
-        if self.status == "synced":
-            line.append(" \u25cf ", style=f"bold {NEON_GREEN}")
-            line.append("SYNCED", style=f"bold {NEON_GREEN}")
-        elif self.status == "syncing":
-            line.append(" \u25d0 ", style=f"bold {SOFT_YELLOW}")
-            line.append("SYNCING", style=f"bold {SOFT_YELLOW}")
-            if self.sync_pct > 0:
-                line.append(f" {self.sync_pct:.2f}%", style=SOFT_YELLOW)
-        else:
-            line.append(" \u25cb ", style="dim")
-            line.append("OFFLINE", style="dim red")
+        if vis.get('status', True):
+            if self.status == "synced":
+                line.append(" \u25cf ", style=f"bold {NEON_GREEN}")
+                line.append("SYNCED", style=f"bold {NEON_GREEN}")
+            elif self.status == "syncing":
+                line.append(" \u25d0 ", style=f"bold {SOFT_YELLOW}")
+                line.append("SYNCING", style=f"bold {SOFT_YELLOW}")
+                if self.sync_pct > 0:
+                    line.append(f" {self.sync_pct:.2f}%", style=SOFT_YELLOW)
+            else:
+                line.append(" \u25cb ", style="dim")
+                line.append("OFFLINE", style="dim red")
 
-        line.append("  \u2502  ", style=DIM_BORDER)
-        chain_colors = {'main': NEON_GREEN, 'test': SOFT_YELLOW,
-                        'signet': CYAN, 'regtest': PURPLE}
-        line.append(self.chain.upper(),
-                    style=f"bold {chain_colors.get(self.chain, 'white')}")
+        if vis.get('chain', True):
+            line.append(*sep)
+            chain_colors = {'main': NEON_GREEN, 'test': SOFT_YELLOW,
+                            'signet': CYAN, 'regtest': PURPLE}
+            line.append(self.chain.upper(),
+                        style=f"bold {chain_colors.get(self.chain, 'white')}")
 
-        line.append("  \u2502  ", style=DIM_BORDER)
-        line.append("\u29eb ", style=BTC_ORANGE)
-        line.append(jformat(self.blocks, 0), style="bold white")
+        if vis.get('blocks', True):
+            line.append(*sep)
+            line.append("\u29eb ", style=BTC_ORANGE)
+            line.append(jformat(self.blocks, 0), style="bold white")
 
-        line.append("  \u2502  ", style=DIM_BORDER)
-        line.append("\u21c4 ", style=CYAN)
-        line.append(str(self.peers), style="bold white")
+        if vis.get('peers', True):
+            line.append(*sep)
+            line.append("\u21c4 ", style=CYAN)
+            line.append(str(self.peers), style="bold white")
 
-        if self.btc_price > 0:
-            line.append("  \u2502  ", style=DIM_BORDER)
+        if vis.get('price', True) and self.btc_price > 0:
+            line.append(*sep)
             line.append("$", style=NEON_GREEN)
             line.append(f"{self.btc_price:,.0f}", style=f"bold {NEON_GREEN}")
 
-        if self.hashprice > 0:
-            line.append("  \u2502  ", style=DIM_BORDER)
+        if vis.get('hashprice', True) and self.hashprice > 0:
+            line.append(*sep)
             line.append(f"${self.hashprice:,.2f}", style=f"bold {NEON_GREEN}")
             line.append("/PH", style="dim")
 
-        if self.epoch_avg > 0:
-            line.append("  \u2502  ", style=DIM_BORDER)
+        if vis.get('epoch_avg', True) and self.epoch_avg > 0:
+            line.append(*sep)
             mins = int(self.epoch_avg // 60)
             secs = int(self.epoch_avg % 60)
             if self.epoch_avg < 540:
@@ -371,15 +388,16 @@ class StatusBar(Static):
             line.append("\u23f1 ", style="dim")
             line.append(f"{mins}m{secs:02d}s", style=f"bold {color}")
 
-        if self.fee_pct > 0:
-            line.append("  \u2502  ", style=DIM_BORDER)
+        if vis.get('fee_pct', True) and self.fee_pct > 0:
+            line.append(*sep)
             fc = NEON_GREEN if self.fee_pct < 10 else (
                 SOFT_YELLOW if self.fee_pct < 50 else BTC_ORANGE)
             line.append("Fee ", style="dim")
             line.append(f"{self.fee_pct:.1f}%", style=f"bold {fc}")
 
-        line.append("  \u2502  ", style=DIM_BORDER)
-        line.append(datetime.now().strftime("%H:%M:%S"), style="dim")
+        if vis.get('time', True):
+            line.append(*sep)
+            line.append(datetime.now().strftime("%H:%M:%S"), style="dim")
 
         return line
 
@@ -640,6 +658,7 @@ class PriceCard(Static):
         self.data: Dict[str, Any] = {}
         self.fees: Dict[str, Any] = {}
         self.block_time_stats: Dict[str, Any] = {}
+        self.figlet_font: str = 'small'
 
     def update_data(self, price: Dict, fees: Dict = None,
                     block_time_stats: Dict[str, Any] = None):
@@ -668,7 +687,7 @@ class PriceCard(Static):
         # Render price display
         if use_figlet:
             try:
-                fig = pyfiglet.Figlet(font='small')
+                fig = pyfiglet.Figlet(font=self.figlet_font)
                 price_str = f"$ {usd:,.0f}"
                 raw = fig.renderText(price_str)
                 lines = [ln for ln in raw.split('\n') if ln.strip()]
@@ -770,6 +789,7 @@ class BlockHeightCard(Static):
         self.is_ibd: bool = False
         self.block_time_stats: Dict[str, Any] = {}
         self.diff_adj: Dict[str, Any] = {}
+        self.figlet_font: str = 'small'
 
     def update_data(self, blocks: int, last_block_time: int = 0,
                     is_ibd: bool = False,
@@ -873,7 +893,7 @@ class BlockHeightCard(Static):
 
         if use_figlet:
             try:
-                fig = pyfiglet.Figlet(font='small')
+                fig = pyfiglet.Figlet(font=self.figlet_font)
                 height_str = str(self.block_height)
                 raw = fig.renderText(height_str)
                 lines = [ln for ln in raw.split('\n') if ln.strip()]
@@ -2023,6 +2043,7 @@ class BitcoinTUI(App):
         ("r", "rain",          "Rain"),
         ("c", "toggle_config", "Config"),
         ("l", "view_logs",     "Logs"),
+        ("s", "display_settings", "Display"),
         ("d", "enable_rpc_debug", "Debug"),
     ]
 
@@ -2041,6 +2062,7 @@ class BitcoinTUI(App):
         self._block_time_stats: Dict[str, Any] = {}
         self._show_startup_rain = True
         self._current_layout: Optional[int] = None
+        self._display_settings = load_display_settings()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -2126,6 +2148,7 @@ class BitcoinTUI(App):
         self.title = "Bitcoin Terminal"
         self.sub_title = str(self.datadir) if self.datadir else "No datadir"
 
+        self._apply_display_settings()
         self._apply_layout(self.size.width, self.size.height)
 
         if self.datadir and self.datadir.exists():
@@ -2283,6 +2306,56 @@ class BitcoinTUI(App):
             'hashprice', 0) or 0.0
         self.status_bar.fee_pct = self._block_time_stats.get(
             'avg_fee_pct', 0) or 0.0
+
+    # ── Card name → attribute mapping for visibility ──
+    _CARD_ATTR_MAP = {
+        'block_height': 'block_height_card',
+        'price': 'price_card',
+        'node': 'node_card',
+        'network': 'network_card',
+        'market': 'market_card',
+        'mempool': 'mempool_card',
+        'blockchain': 'blockchain_card',
+        'halving': 'halving_card',
+        'rpc': 'rpc_card',
+        'system': 'system_card',
+        'satoshi': 'satoshi_card',
+    }
+
+    def _apply_display_settings(self) -> None:
+        """Apply display settings to cards, fonts, and status bar."""
+        ds = self._display_settings
+        font = ds.get('figlet_font', 'small')
+        self.price_card.figlet_font = font
+        self.block_height_card.figlet_font = font
+
+        # Card visibility
+        vis_cards = ds.get('visible_cards', {})
+        for key, attr in self._CARD_ATTR_MAP.items():
+            card = getattr(self, attr, None)
+            if card:
+                card.display = vis_cards.get(key, True)
+
+        # Status bar header visibility
+        vis_header = ds.get('visible_header', {})
+        self.status_bar.visible_items = vis_header
+
+        # Refresh all visible cards
+        for attr in self._CARD_ATTR_MAP.values():
+            card = getattr(self, attr, None)
+            if card and card.display:
+                card.refresh()
+        self.status_bar.refresh()
+
+    def action_display_settings(self) -> None:
+        """Open the display settings screen."""
+        def on_return(result) -> None:
+            self._display_settings = load_display_settings()
+            self._apply_display_settings()
+            self._current_layout = None  # force re-layout
+            self._apply_layout(self.size.width, self.size.height)
+
+        self.push_screen(DisplaySettingsScreen(), callback=on_return)
 
     def action_refresh(self) -> None:
         self.refresh_data()
