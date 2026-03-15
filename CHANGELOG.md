@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.0-beta.2] — 2026-03-15
+
+### Fixed
+
+- **False SYNCED status** — Node showed "SYNCED" while still catching up after restart. Now checks `blocks` vs `headers` gap (>3 blocks behind = SYNCING), not just `verificationprogress` which can read ~100% even hundreds of blocks behind
+- **Spurious new-block animations during catch-up** — Every block synced during catch-up triggered the Matrix rain "NEW BLOCK" animation. Now suppressed when node is behind the network tip, not only during Initial Block Download
+- **InvalidStateError crash** — `MatrixRainScreen.dismiss()` could fire multiple times from the timer callback, crashing with "invalid state". Added dismiss guard and explicit timer stop to prevent double-dismiss from both timer expiry and key press
+
+---
+
 ## [0.1.0-beta.1] — 2026-03-11
 
 First public beta release.
@@ -40,4 +50,5 @@ First public beta release.
 
 ---
 
+[0.1.0-beta.2]: https://github.com/atlas-ops-bot/bitcoin-terminal/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/atlas-ops-bot/bitcoin-terminal/releases/tag/v0.1.0-beta.1

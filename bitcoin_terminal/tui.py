@@ -452,7 +452,10 @@ class NodeCard(Static):
         headers = self.data.get('headers', 0)
         sync_pct = self.data.get('sync_pct', 0)
 
-        if sync_pct >= 99.99:
+        catching_up = (headers > 0 and (headers - blocks) > 3)
+        fully_synced = sync_pct >= 99.99 and not catching_up and not self.data.get('ibd', False)
+
+        if fully_synced:
             st = Text()
             st.append("\u25cf SYNCED", style=f"bold {NEON_GREEN}")
             t.add_row("Status", st)
@@ -495,7 +498,7 @@ class NodeCard(Static):
             st.append(" PRUNED", style=f"bold {SOFT_YELLOW}")
         t.add_row("Storage", st)
 
-        border = NEON_GREEN if sync_pct >= 99.99 else BTC_ORANGE
+        border = NEON_GREEN if fully_synced else BTC_ORANGE
         return Panel(t, title=f"[bold {BTC_ORANGE}]\u29eb NODE[/]",
                      border_style=border, box=box.ROUNDED)
 
@@ -1756,6 +1759,8 @@ class MatrixRainScreen(ModalScreen):
         self._start = 0.0
         self._grid: list = []
         self._canvas: _RainCanvas | None = None
+        self._dismissed = False
+        self._timer = None
 
     def compose(self) -> ComposeResult:
         self._canvas = _RainCanvas()
@@ -1789,8 +1794,13 @@ class MatrixRainScreen(ModalScreen):
         self._timer = self.set_interval(1 / 16, self._tick)
 
     def _tick(self) -> None:
+        if self._dismissed:
+            return
         elapsed = time.monotonic() - self._start
         if elapsed >= self.DURATION:
+            self._dismissed = True
+            if self._timer:
+                self._timer.stop()
             self.dismiss()
             return
 
@@ -1950,6 +1960,11 @@ class MatrixRainScreen(ModalScreen):
 
     def on_key(self, event) -> None:
         """Any key press dismisses the animation early."""
+        if self._dismissed:
+            return
+        self._dismissed = True
+        if self._timer:
+            self._timer.stop()
         self.dismiss()
 
 
@@ -2061,6 +2076,7 @@ class BitcoinTUI(App):
         self._last_block_height: int = 0
         self._block_time_stats: Dict[str, Any] = {}
         self._show_startup_rain = True
+        self._rain_screen_active = False
         self._current_layout: Optional[int] = None
         self._display_settings = load_display_settings()
 
@@ -2215,21 +2231,36 @@ class BitcoinTUI(App):
         headers = blockchain.get('headers', 0)
         sync_info = self._sync_tracker.update(blocks, headers)
 
+        # Consider "catching up" if >3 blocks behind headers,
+        # even after IBD is complete (e.g. node was offline for hours)
+        catching_up = headers > 0 and (headers - blocks) > 3
+
         # Startup rain on first successful load
         if self._show_startup_rain and blocks > 0:
             self._show_startup_rain = False
             self._last_block_height = blocks
-            self.push_screen(MatrixRainScreen(
-                block_height=blocks,
-                banner_text="  \u20bf  Welcome to Bitcoin Node Terminal  \u20bf  ",
-            ))
+            if not catching_up:
+                self._rain_screen_active = True
+                self.push_screen(
+                    MatrixRainScreen(
+                        block_height=blocks,
+                        banner_text="  \u20bf  Welcome to Bitcoin Node Terminal  \u20bf  ",
+                    ),
+                    callback=lambda _: setattr(self, '_rain_screen_active', False),
+                )
         else:
-            # Detect new block (skip during IBD and first load)
+            # Detect new block (skip during IBD, catch-up, and first load)
             if (blocks > 0
                     and self._last_block_height > 0
                     and blocks > self._last_block_height
-                    and not is_ibd):
-                self.push_screen(MatrixRainScreen(block_height=blocks))
+                    and not is_ibd
+                    and not catching_up
+                    and not self._rain_screen_active):
+                self._rain_screen_active = True
+                self.push_screen(
+                    MatrixRainScreen(block_height=blocks),
+                    callback=lambda _: setattr(self, '_rain_screen_active', False),
+                )
             self._last_block_height = blocks
 
         # ── Block timing stats & derived metrics (compute early) ──
@@ -2291,12 +2322,13 @@ class BitcoinTUI(App):
         if headers > 0:
             self.halving_card.update_data(headers)
 
-        # Status bar
+        # Status bar — also check blocks vs headers to avoid
+        # showing SYNCED when the node is still catching up
         sync_pct = blockchain.get('verificationprogress', 0.0) * 100
         self.status_bar.sync_pct = sync_pct
         self.status_bar.chain = blockchain.get('chain', 'main')
-        self.status_bar.status = (
-            "synced" if sync_pct >= 99.99 else "syncing")
+        fully_synced = sync_pct >= 99.99 and not catching_up and not is_ibd
+        self.status_bar.status = "synced" if fully_synced else "syncing"
         self.status_bar.blocks = blocks
         self.status_bar.peers = network.get('connections', 0)
         self.status_bar.btc_price = price.get('usd', 0)
