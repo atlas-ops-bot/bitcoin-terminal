@@ -33,7 +33,7 @@ from bitcoin_terminal.ansi_utils import (
 )
 from bitcoin_terminal.data import (
     fetch_price, fetch_difficulty_adjustment, fetch_hashrate,
-    fetch_recommended_fees, fetch_system_metrics,
+    fetch_recommended_fees, fetch_system_metrics, fetch_network_tip,
     SyncTracker, format_hashrate, format_eta,
     PeerTracker, RPCMonitor,
     block_subsidy, total_mined, MAX_SUPPLY,
@@ -263,6 +263,16 @@ def _fetch_all_data(rpc: BitcoinRPC, datadir: str = None) -> Dict[str, Any]:
     data['fees'] = fetch_recommended_fees()
     data['system'] = fetch_system_metrics(datadir=datadir)
 
+    # Network tip from mempool.space — fixes "headers == blocks" on
+    # startup before Bitcoin Core's own header sync finishes.
+    blocks = data['blockchain'].get('blocks', 0)
+    headers = data['blockchain'].get('headers', 0)
+    if headers <= blocks and data['blockchain'].get(
+            'verificationprogress', 1.0) < 0.9999:
+        net_tip = fetch_network_tip()
+        if net_tip > headers:
+            data['blockchain']['headers'] = net_tip
+
     return data
 
 
@@ -278,6 +288,32 @@ def _format_time_ago(secs: int) -> str:
         days = secs // 86400
         hours = (secs % 86400) // 3600
         return f"{days}d {hours}h ago"
+
+
+def _format_behind(secs: int) -> str:
+    """Format seconds-behind-tip into a human-readable string."""
+    if secs < 3600:
+        return f"{secs // 60}m behind"
+    elif secs < 86400:
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        return f"{h}h {m}m behind"
+    elif secs < 86400 * 7:
+        d = secs // 86400
+        h = (secs % 86400) // 3600
+        return f"{d}d {h}h behind"
+    elif secs < 86400 * 30:
+        w = secs // (86400 * 7)
+        d = (secs % (86400 * 7)) // 86400
+        return f"{w}w {d}d behind"
+    elif secs < 86400 * 365:
+        mo = secs // (86400 * 30)
+        d = (secs % (86400 * 30)) // 86400
+        return f"{mo}mo {d}d behind"
+    else:
+        y = secs // (86400 * 365)
+        mo = (secs % (86400 * 365)) // (86400 * 30)
+        return f"{y}y {mo}mo behind"
 
 
 def _halving_info(current_height: int) -> Dict[str, Any]:
@@ -411,7 +447,7 @@ class NodeCard(Static):
         self.sync_info: Dict[str, Any] = {}
 
     def update_data(self, blockchain: Dict, network: Dict, uptime: int,
-                    sync_info: Dict = None):
+                    sync_info: Dict = None, last_block_time: int = 0):
         self.data = {
             'blocks': blockchain.get('blocks', 0),
             'headers': blockchain.get('headers', 0),
@@ -423,6 +459,7 @@ class NodeCard(Static):
             'version': network.get('version', 0),
             'subversion': network.get('subversion', ''),
             'uptime': uptime,
+            'last_block_time': last_block_time,
         }
         self.sync_info = sync_info or {}
         self.refresh()
@@ -473,6 +510,15 @@ class NodeCard(Static):
                 if bps > 0:
                     eta_text.append(f"  ({bps:.0f} blk/s)", style="dim")
                 t.add_row("ETA", eta_text)
+
+            # How far behind the network tip
+            lbt = self.data.get('last_block_time', 0)
+            if lbt > 0:
+                behind_secs = int(time.time() - lbt)
+                if behind_secs > 60:
+                    t.add_row("Behind", Text(
+                        _format_behind(behind_secs),
+                        style=f"bold {SOFT_YELLOW}"))
 
         ht = Text()
         ht.append(f"{blocks:,}", style="bold white")
@@ -2079,6 +2125,8 @@ class BitcoinTUI(App):
         self._rain_screen_active = False
         self._current_layout: Optional[int] = None
         self._display_settings = load_display_settings()
+        self._last_good_data: Optional[Dict[str, Any]] = None
+        self._consecutive_errors: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -2215,16 +2263,38 @@ class BitcoinTUI(App):
         system = data.get('system', {})
 
         if 'error' in data:
-            self.node_card.show_error(data['error'])
-            self.status_bar.status = "offline"
-            self.price_card.update_data(price, fees=fees)
-            self.system_card.update_data(system)
-            if hashrate or diff_adj:
-                self.blockchain_card.update_data(
-                    {'difficulty': 0, 'mediantime': 0,
-                     'bestblockhash': '', 'warnings': ''},
-                    hashrate=hashrate, diff_adj=diff_adj)
-            return
+            self._consecutive_errors += 1
+            # On transient errors, reuse last good data for up to 6
+            # cycles (~30s) so the UI doesn't flash CONNECTION FAILED
+            # every refresh while the node is briefly busy.
+            if (self._last_good_data is not None
+                    and self._consecutive_errors <= 6):
+                data = self._last_good_data
+                # Re-extract all fields from the cached good data
+                blockchain = data.get('blockchain', {})
+                network = data.get('network', {})
+                mempool = data.get('mempool', {})
+                peers = data.get('peers', [])
+                uptime = data.get('uptime', 0)
+                price = data.get('price', {})
+                fees = data.get('fees', {})
+                hashrate = data.get('hashrate', {})
+                diff_adj = data.get('difficulty_adj', {})
+                system = data.get('system', {})
+            else:
+                self.node_card.show_error(data['error'])
+                self.status_bar.status = "offline"
+                self.price_card.update_data(price, fees=fees)
+                self.system_card.update_data(system)
+                if hashrate or diff_adj:
+                    self.blockchain_card.update_data(
+                        {'difficulty': 0, 'mediantime': 0,
+                         'bestblockhash': '', 'warnings': ''},
+                        hashrate=hashrate, diff_adj=diff_adj)
+                return
+        else:
+            self._consecutive_errors = 0
+            self._last_good_data = data
 
         is_ibd = blockchain.get('initialblockdownload', False)
         blocks = blockchain.get('blocks', 0)
@@ -2285,7 +2355,9 @@ class BitcoinTUI(App):
 
         # ── Update cards ──
         self.node_card.update_data(blockchain, network, uptime,
-                                   sync_info=sync_info)
+                                   sync_info=sync_info,
+                                   last_block_time=data.get(
+                                       'last_block_time', 0))
         conn_stats = data.get('peer_stats', {})
         self.network_card.update_data(network, peers, conn_stats=conn_stats)
         self.mempool_card.update_data(mempool, is_ibd=is_ibd)

@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.0-beta.3] — 2026-03-28
+
+### Added
+
+- **"Behind" indicator during sync** — Node card now shows how far behind the network tip the node is in human-readable units (e.g. "3h 12m behind", "2d 5h behind", "1mo 4d behind") using the last synced block's timestamp
+
+### Fixed
+
+- **Total blocks wrong at startup** — Node card showed `blocks / blocks` (e.g. "941,006 / 941,006") instead of the real network tip when Bitcoin Core's header sync hadn't finished yet. Now fetches the network tip from mempool.space as a fallback when `headers <= blocks` during sync
+- **Connection error flashing** — Every failed RPC call instantly showed "CONNECTION FAILED" in the node card, causing the UI to flash on transient errors during node startup or heavy sync. Now reuses last-known-good data for up to 6 cycles (~30s) before showing the error state
+
+---
+
 ## [0.1.0-beta.2] — 2026-03-15
 
 ### Fixed

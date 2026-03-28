@@ -191,6 +191,32 @@ def fetch_price() -> Dict[str, Any]:
     return {}
 
 
+# ── Network tip cache ──────────────────────────────────────────────────
+# Stores the last known network tip height from mempool.space so we can
+# show accurate total blocks even before Bitcoin Core's header sync
+# finishes after a restart.
+_network_tip_height: int = 0
+_network_tip_ts: float = 0.0
+
+
+def fetch_network_tip() -> int:
+    """Fetch current network tip height from mempool.space.
+
+    Caches the result for 60 seconds to avoid hammering the API.
+    Returns cached value on failure.
+    """
+    global _network_tip_height, _network_tip_ts
+    now = time.time()
+    if _network_tip_height > 0 and (now - _network_tip_ts) < 60:
+        return _network_tip_height
+    data = _fetch_json('https://mempool.space/api/blocks/tip/height',
+                       timeout=3)
+    if isinstance(data, int) and data > 0:
+        _network_tip_height = data
+        _network_tip_ts = now
+    return _network_tip_height
+
+
 def fetch_difficulty_adjustment() -> Dict[str, Any]:
     """Fetch difficulty adjustment data from mempool.space."""
     data = _fetch_json('https://mempool.space/api/v1/difficulty-adjustment')
