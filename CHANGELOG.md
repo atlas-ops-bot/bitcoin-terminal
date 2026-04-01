@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.0-beta.4] — 2026-04-01
+
+### Added
+
+- **Auto-start Bitcoin Core** — On launch, if the node's RPC is unreachable the app now attempts to start `bitcoind` automatically. Searches well-known binary locations per platform (Homebrew, snap, app bundles, Program Files) and falls back to `Bitcoin-Qt -server` if no daemon is found. Waits up to 30 s for the RPC to become reachable, then proceeds to the TUI regardless
+
+---
+
 ## [0.1.0-beta.3] — 2026-03-28
 
 ### Added

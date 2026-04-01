@@ -9,6 +9,7 @@ from pathlib import Path
 from bitcoin_terminal.scanner import BitcoinScanner
 from bitcoin_terminal.tui import BitcoinTUI
 from bitcoin_terminal.config import Config
+from bitcoin_terminal.node_starter import attempt_start_node
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
@@ -108,6 +109,7 @@ def main():
                 border_style="blue",
                 box=box.ROUNDED
             ))
+            attempt_start_node(datadir, env_config=config.get_rpc_config())
             launch_tui(datadir)
             return
 
@@ -122,6 +124,7 @@ def main():
                 border_style="green",
                 box=box.ROUNDED
             ))
+            attempt_start_node(datadir, env_config=config.get_rpc_config())
             launch_tui(datadir)
         else:
             # No valid directory after wizard — try auto-scan fallback
@@ -143,6 +146,7 @@ def main():
 
                 # Launch TUI
                 console.print()
+                attempt_start_node(datadir, env_config=config.get_rpc_config())
                 console.print("[cyan]🚀 Launching Bitcoin Terminal...[/cyan]")
                 console.print()
                 launch_tui(datadir)
