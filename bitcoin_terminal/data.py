@@ -13,7 +13,7 @@ import time
 import platform
 import ctypes
 import ctypes.util
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
 
@@ -535,6 +535,8 @@ class PeerTracker:
     - Security flags (rapid churn, unusual inbound spikes)
     """
 
+    _MAX_PEER_HISTORY = 10_000  # cap unique peers tracked
+
     def __init__(self):
         self._start_time: float = time.time()
 
@@ -542,19 +544,16 @@ class PeerTracker:
         self._peer_history: Dict[str, Dict[str, Any]] = {}
 
         # Snapshots of connection counts over time: [(timestamp, total, in, out)]
-        self._conn_snapshots: List[tuple] = []
-        self._max_snapshots = 17_280  # ~24h at 5s intervals
+        self._conn_snapshots: deque = deque(maxlen=17_280)  # ~24h at 5s intervals
 
         # Bandwidth tracking for rate calculation
-        self._bw_samples: List[tuple] = []  # [(ts, total_rx, total_tx)]
-        self._max_bw_samples = 12  # ~1 min of samples for rate
+        self._bw_samples: deque = deque(maxlen=12)  # ~1 min of samples for rate
 
         # Current peer set (keys) for churn detection
         self._prev_peer_keys: Set[str] = set()
 
         # Churn events: [(timestamp, 'connect'|'disconnect')]
-        self._churn_events: List[tuple] = []
-        self._max_churn_events = 50_000
+        self._churn_events: deque = deque(maxlen=50_000)
 
         # Security alerts
         self._alerts: List[Dict[str, Any]] = []
@@ -589,29 +588,42 @@ class PeerTracker:
             self._churn_events.append((now, 'connect'))
         for _ in dropped_peers:
             self._churn_events.append((now, 'disconnect'))
-        if len(self._churn_events) > self._max_churn_events:
-            self._churn_events = self._churn_events[-self._max_churn_events:]
         self._prev_peer_keys = current_keys
+
+        # Evict stale peers when history exceeds cap
+        if len(self._peer_history) > self._MAX_PEER_HISTORY:
+            self._evict_stale_peers(now)
 
         # Record connection snapshot
         total = network.get('connections', len(peers))
         conn_in = network.get('connections_in', 0)
         conn_out = network.get('connections_out', 0)
         self._conn_snapshots.append((now, total, conn_in, conn_out))
-        if len(self._conn_snapshots) > self._max_snapshots:
-            self._conn_snapshots = self._conn_snapshots[-self._max_snapshots:]
 
         # Bandwidth sample
         total_rx = sum(p.get('bytesrecv', 0) for p in peers)
         total_tx = sum(p.get('bytessent', 0) for p in peers)
         self._bw_samples.append((now, total_rx, total_tx))
-        if len(self._bw_samples) > self._max_bw_samples:
-            self._bw_samples = self._bw_samples[-self._max_bw_samples:]
 
         # Security checks
         self._check_security(now, conn_in, total)
 
         return self._build_stats(now, peers)
+
+    def _evict_stale_peers(self, now: float):
+        """Remove oldest peers to keep history within cap."""
+        # Keep currently-connected + most-recently-seen entries
+        keep = self._MAX_PEER_HISTORY * 3 // 4
+        sorted_keys = sorted(
+            self._peer_history,
+            key=lambda k: self._peer_history[k]['last_seen'],
+        )
+        to_remove = len(sorted_keys) - keep
+        if to_remove > 0:
+            # Never remove currently-connected peers
+            for key in sorted_keys[:to_remove]:
+                if key not in self._prev_peer_keys:
+                    del self._peer_history[key]
 
     def _check_security(self, now: float,
                         conn_in: int, total: int):
@@ -829,24 +841,25 @@ class RPCMonitor:
     bitcoin.conf. Without those, only auth failures are tracked.
     """
 
+    _MAX_RPC_IPS = 5_000  # cap unique IPs tracked
+
     def __init__(self, log_path: Optional[Path] = None):
         self._log_path = log_path
         self._file_pos: int = 0  # seek position for incremental reads
         self._initialized: bool = False
 
         # Events: [(epoch, event_type, detail)]
-        self._events: List[tuple] = []
-        self._max_events = 100_000
+        self._events: deque = deque(maxlen=100_000)
 
         # Unique IPs that connected via RPC
         self._rpc_ips: Dict[str, Dict[str, Any]] = {}
 
         # RPC method call counts
         self._method_counts: Dict[str, int] = defaultdict(int)
-        self._method_counts_1h: List[tuple] = []  # [(ts, method)]
+        self._method_counts_1h: deque = deque(maxlen=100_000)
 
         # Auth failures: [(ts, detail)]
-        self._auth_failures: List[tuple] = []
+        self._auth_failures: deque = deque(maxlen=10_000)
 
         # Connection counts
         self._total_accepted: int = 0
@@ -925,7 +938,7 @@ class RPCMonitor:
             else:
                 self._rpc_ips[ip]['last_seen'] = ts
                 self._rpc_ips[ip]['count'] += 1
-            self._trim_events()
+            self._evict_stale_ips()
             return
 
         # RPC method call
@@ -938,7 +951,6 @@ class RPCMonitor:
             self._method_counts[method] += 1
             self._method_counts_1h.append((ts, method))
             self._events.append((ts, 'method', method))
-            self._trim_events()
             return
 
         # Connection closed
@@ -949,7 +961,6 @@ class RPCMonitor:
                 return
             self._total_closed += 1
             self._events.append((ts, 'close', ''))
-            self._trim_events()
             return
 
         # Auth failure
@@ -959,14 +970,18 @@ class RPCMonitor:
             ts = _parse_log_ts(ts_str) if ts_str else time.time()
             self._auth_failures.append((ts, line.strip()[:200]))
             self._events.append((ts, 'auth_fail', ''))
-            # Keep auth failures bounded
-            if len(self._auth_failures) > 10_000:
-                self._auth_failures = self._auth_failures[-10_000:]
-            self._trim_events()
 
-    def _trim_events(self):
-        if len(self._events) > self._max_events:
-            self._events = self._events[-self._max_events:]
+    def _evict_stale_ips(self):
+        """Remove oldest IPs when history exceeds cap."""
+        if len(self._rpc_ips) <= self._MAX_RPC_IPS:
+            return
+        keep = self._MAX_RPC_IPS * 3 // 4
+        sorted_ips = sorted(
+            self._rpc_ips,
+            key=lambda k: self._rpc_ips[k]['last_seen'],
+        )
+        for ip in sorted_ips[:len(sorted_ips) - keep]:
+            del self._rpc_ips[ip]
 
     def _build_stats(self, now: float) -> Dict[str, Any]:
         """Build RPC connection statistics."""
@@ -974,10 +989,12 @@ class RPCMonitor:
         twenty_four_ago = now - 86400
 
         # Filter method calls list for 1h window
-        self._method_counts_1h = [
-            (ts, m) for ts, m in self._method_counts_1h
-            if ts >= one_hour_ago
-        ]
+        filtered = deque(
+            ((ts, m) for ts, m in self._method_counts_1h
+             if ts >= one_hour_ago),
+            maxlen=self._method_counts_1h.maxlen,
+        )
+        self._method_counts_1h = filtered
 
         # Connections by time window
         accepts_1h = sum(
@@ -1011,8 +1028,10 @@ class RPCMonitor:
         auth_fails_all = len(self._auth_failures)
 
         # Recent auth failure details (last 5)
+        n = len(self._auth_failures)
+        start = max(0, n - 5)
         recent_auth_fails = [
-            detail for _, detail in self._auth_failures[-5:]
+            self._auth_failures[i][1] for i in range(start, n)
         ]
 
         # Top RPC methods (all time)

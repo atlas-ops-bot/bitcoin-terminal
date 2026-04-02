@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.0-beta.5] — 2026-04-02
+
+### Fixed
+
+- **Memory leak — unbounded peer history** — `PeerTracker._peer_history` dict stored every unique peer ever seen and never evicted entries. Now capped at 10,000 with automatic eviction of the oldest stale peers while preserving currently-connected ones
+- **Memory leak — unbounded RPC IP history** — `RPCMonitor._rpc_ips` dict accumulated every unique RPC client IP forever. Now capped at 5,000 with stale eviction
+- **Expensive list trimming** — Six bounded lists (`_churn_events`, `_conn_snapshots`, `_events`, `_auth_failures`, `_bw_samples`, `_method_counts_1h`) used slice-and-copy trimming (`list = list[-N:]`) which allocated a full copy on every overflow. Converted all to `collections.deque(maxlen=N)` for O(1) append with automatic eviction
+
+---
+
 ## [0.1.0-beta.4] — 2026-04-01
 
 ### Added
@@ -71,5 +81,8 @@ First public beta release.
 
 ---
 
+[0.1.0-beta.5]: https://github.com/atlas-ops-bot/bitcoin-terminal/compare/v0.1.0-beta.4...v0.1.0-beta.5
+[0.1.0-beta.4]: https://github.com/atlas-ops-bot/bitcoin-terminal/compare/v0.1.0-beta.3...v0.1.0-beta.4
+[0.1.0-beta.3]: https://github.com/atlas-ops-bot/bitcoin-terminal/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/atlas-ops-bot/bitcoin-terminal/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/atlas-ops-bot/bitcoin-terminal/releases/tag/v0.1.0-beta.1
